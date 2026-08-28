@@ -23,6 +23,12 @@ Find the MCP configs on this machine, without analysing them:
 mcpwn discover
 ```
 
+See everything a server exposes, with no analysis:
+
+```bash
+mcpwn view --url https://example.com/mcp
+```
+
 Scan them:
 
 ```bash

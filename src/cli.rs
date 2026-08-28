@@ -25,7 +25,8 @@ use mcpwn::{
 #[derive(Debug, Parser)]
 #[command(name = "mcpwn", version, about, long_about = None)]
 pub struct Cli {
-    /// Print per-item detail (findings: message and evidence; discover: servers).
+    /// Print more detail: finding messages and evidence for `scan`, the tools
+    /// of each server for `discover`, the raw input schemas for `view`.
     #[arg(short, long, global = true)]
     pub verbose: bool,
 
@@ -41,6 +42,9 @@ pub struct Cli {
 pub enum Command {
     /// List the MCP configuration files on this machine, without analysing them.
     Discover(DiscoverArgs),
+    /// Show everything a server exposes: its tools, their descriptions and
+    /// their parameters. No analysis.
+    View(ViewArgs),
     /// Scan MCP server configs for dangerous tool definitions.
     Scan(ScanArgs),
     /// Explain a rule id, e.g. `mcpwn explain MCPWN-CAP-001`. Without one,
@@ -79,6 +83,30 @@ pub struct ExplainArgs {
     /// The rule id. The `MCPWN-` prefix is optional and case does not matter.
     #[arg(value_name = "ID")]
     pub id: Option<String>,
+
+    /// Output format.
+    #[arg(short, long, value_enum, default_value_t = InventoryFormat::Terminal)]
+    pub format: InventoryFormat,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ViewArgs {
+    /// Project directory (or a single config file) to read. Without one, the
+    /// well-known per-user locations are used instead.
+    #[arg(value_name = "PATH")]
+    pub paths: Vec<PathBuf>,
+
+    /// Read one MCP endpoint directly. Repeatable. Cannot be combined with a PATH.
+    #[arg(long, value_name = "URL", conflicts_with = "paths")]
+    pub url: Vec<String>,
+
+    /// Extra HTTP header, curl-style. Repeatable.
+    #[arg(short = 'H', long = "header", value_name = "NAME: VALUE")]
+    pub headers: Vec<String>,
+
+    /// Show only tools whose name contains this.
+    #[arg(short, long, value_name = "SUBSTRING")]
+    pub tool: Option<String>,
 
     /// Output format.
     #[arg(short, long, value_enum, default_value_t = InventoryFormat::Terminal)]
@@ -205,6 +233,7 @@ impl Cli {
     pub fn run(&self) -> Result<i32> {
         match &self.command {
             Command::Discover(args) => self.discover(args),
+            Command::View(args) => self.view(args),
             Command::Scan(args) => self.scan(args),
             Command::Explain(args) => self.explain(args),
             Command::Diff(args) => self.diff(args),
@@ -239,6 +268,36 @@ impl Cli {
         stdout.flush()?;
 
         self.emit_warnings(&loaded, &servers);
+        Ok(exit::CLEAN)
+    }
+
+    /// `view` shares discovery, loading and enumeration with `scan`; only the
+    /// rendering differs. Nothing is analysed and nothing can fail the run.
+    fn view(&self, args: &ViewArgs) -> Result<i32> {
+        let source = if args.url.is_empty() {
+            Source::Configs(&args.paths)
+        } else {
+            Source::Endpoints(&args.url)
+        };
+        let headers = enumerate::parse_headers(&args.headers)?;
+        let (loaded, enumerated) = collect(&source, headers)?;
+
+        let mut stdout = io::stdout().lock();
+        match args.format {
+            InventoryFormat::Terminal => {
+                mcpwn::output::view::ViewRenderer::new()
+                    .color(self.use_color())
+                    .verbose(self.verbose)
+                    .filter(args.tool.clone())
+                    .render(&enumerated, &mut stdout)?;
+            }
+            InventoryFormat::Json => {
+                writeln!(stdout, "{}", serde_json::to_string_pretty(&enumerated)?)?;
+            }
+        }
+        stdout.flush()?;
+
+        self.emit_warnings(&loaded, &enumerated);
         Ok(exit::CLEAN)
     }
 

@@ -6,3 +6,4 @@ pub mod explain;
 pub mod inventory;
 pub mod render;
 pub mod sarif;
+pub mod view;

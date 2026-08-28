@@ -126,6 +126,130 @@ fn two_endpoints_exposing_the_same_tool_names_collide() {
     assert_eq!(output.status.code(), Some(1));
 }
 
+// --- view -------------------------------------------------------------------
+
+const RICH_TOOLS: &str = r#"{
+  "jsonrpc": "2.0", "id": 1,
+  "result": { "tools": [
+    { "name": "read_file",
+      "description": "Reads a file.\n\nSecond paragraph.",
+      "inputSchema": { "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "Absolute path to read." },
+          "mode": { "type": "string", "enum": ["text", "binary"] },
+          "opts": { "type": "object", "properties": {
+              "region": { "type": "string", "x-mcp-header": "Region" } } }
+        },
+        "required": ["path"] } },
+    { "name": "ping", "description": "Checks liveness.",
+      "inputSchema": { "type": "object", "properties": {} } }
+  ] }
+}"#;
+
+#[test]
+fn view_shows_tools_parameters_and_annotations() {
+    let url = spawn_mock(|_| json_200(RICH_TOOLS));
+
+    let output = mcpwn(&["view", "--url", &url, "--no-color"]);
+    let out = stdout(&output);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(out.contains("read_file"), "{out}");
+    assert!(
+        out.contains("Second paragraph."),
+        "paragraphs are kept:\n{out}"
+    );
+    assert!(out.contains("Absolute path to read."), "{out}");
+    assert!(out.contains("required"), "{out}");
+    assert!(
+        out.contains("one of: text, binary"),
+        "enums are shown:\n{out}"
+    );
+    // Nested parameters keep their path.
+    assert!(out.contains("opts.region"), "{out}");
+    // The schema annotation that turns a parameter into an HTTP header.
+    assert!(out.contains("Mcp-Param-Region"), "{out}");
+    // A tool with an empty schema says so rather than showing nothing.
+    assert!(out.contains("no parameters"), "{out}");
+    assert!(out.contains("1 server(s), 2 tool(s)"), "{out}");
+
+    // No trailing whitespace anywhere: it shows up in every copy-paste.
+    assert!(
+        !out.lines().any(|l| l.ends_with(' ')),
+        "trailing whitespace in the output"
+    );
+}
+
+#[test]
+fn view_can_focus_on_one_tool() {
+    let url = spawn_mock(|_| json_200(RICH_TOOLS));
+
+    let output = mcpwn(&["view", "--url", &url, "--no-color", "--tool", "ping"]);
+    let out = stdout(&output);
+
+    assert!(out.contains("ping"), "{out}");
+    assert!(
+        !out.contains("Absolute path"),
+        "the other tool is filtered out:\n{out}"
+    );
+    assert!(out.contains("1 tool(s) matching `ping`"), "{out}");
+}
+
+#[test]
+fn view_verbose_dumps_the_raw_schema() {
+    let url = spawn_mock(|_| json_200(RICH_TOOLS));
+
+    let out = stdout(&mcpwn(&["view", "--url", &url, "--no-color", "--verbose"]));
+    assert!(
+        out.contains("\"x-mcp-header\""),
+        "the raw schema is printed:\n{out}"
+    );
+}
+
+#[test]
+fn view_json_is_machine_readable() {
+    let url = spawn_mock(|_| json_200(RICH_TOOLS));
+
+    let output = mcpwn(&["view", "--url", &url, "--format", "json"]);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("valid json");
+
+    assert_eq!(parsed[0]["server"]["tools"][0]["name"], "read_file");
+    assert_eq!(parsed[0]["enumeration"], "enumerated");
+}
+
+#[test]
+fn view_reports_a_server_it_could_not_read_without_failing() {
+    let output = mcpwn(&["view", "--url", &common::dead_url(), "--no-color"]);
+
+    // Inspection never fails the run: the point is to see what is there.
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("unreachable"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(!stderr(&output).contains("panicked"));
+}
+
+#[test]
+fn view_says_a_stdio_server_cannot_be_read() {
+    let tmp = TempDir::new("cli-view-stdio");
+    tmp.write(
+        ".cursor/mcp.json",
+        r#"{"mcpServers":{"local":{"command":"npx","args":["-y","x"]}}}"#,
+    );
+
+    let out = stdout(&mcpwn(&[
+        "view",
+        &tmp.path().display().to_string(),
+        "--no-color",
+    ]));
+    assert!(out.contains("local"), "{out}");
+    assert!(out.contains("stdio server"), "{out}");
+    // The launch command is still worth seeing.
+    assert!(out.contains("npx -y x"), "{out}");
+}
+
 #[test]
 fn an_unreachable_url_warns_but_does_not_fail_the_run() {
     let output = mcpwn(&["scan", "--url", &common::dead_url(), "--no-color"]);
