@@ -28,6 +28,10 @@ pub enum Error {
         message: String,
     },
 
+    /// The lockfile could not be used.
+    #[error("lockfile `{path}`: {message}")]
+    Lock { path: String, message: String },
+
     /// A rule set failed to compile.
     #[error("invalid rule set: {0}")]
     Rules(String),
@@ -52,6 +56,13 @@ impl Error {
     pub fn header(name: Option<String>, message: impl Into<String>) -> Self {
         Self::Header {
             name,
+            message: message.into(),
+        }
+    }
+
+    pub fn lock(path: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Lock {
+            path: path.into(),
             message: message.into(),
         }
     }

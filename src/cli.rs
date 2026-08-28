@@ -8,6 +8,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use owo_colors::OwoColorize;
 
+use mcpwn::analysis::registry::Registry;
+use mcpwn::analysis::rugpull::RugPullCheck;
+use mcpwn::lock::{self, Lock, ServerId, DEFAULT_LOCK_FILE};
 use mcpwn::output::{inventory::InventoryRenderer, render::TerminalRenderer, sarif};
 use mcpwn::{
     discovery, enumerate, loading, Analyzer, AnalyzerConfig, DiscoveredConfig, EnumeratedServer,
@@ -79,6 +82,24 @@ pub struct ScanArgs {
     /// space if your shell is set up to skip those.
     #[arg(short = 'H', long = "header", value_name = "NAME: VALUE")]
     pub headers: Vec<String>,
+
+    /// Path to the lockfile used for rug-pull detection.
+    ///
+    /// When it exists it is compared against, and differences are reported.
+    /// Defaults to `mcp.lock` in the working directory.
+    #[arg(long, value_name = "PATH")]
+    pub lock: Option<PathBuf>,
+
+    /// Write the lockfile to establish a baseline. Refuses to overwrite an
+    /// existing one — use --update-lock for that.
+    #[arg(long, conflicts_with = "update_lock")]
+    pub write_lock: bool,
+
+    /// Rewrite the lockfile with what this scan found, after reviewing the
+    /// reported changes. A plain scan never writes the lock: refreshing the
+    /// baseline automatically would erase the mutation it just detected.
+    #[arg(long)]
+    pub update_lock: bool,
 
     /// Output format.
     #[arg(short, long, value_enum, default_value_t = Format::Terminal)]
@@ -162,10 +183,34 @@ impl Cli {
         let (loaded, enumerated) = collect(&source, headers)?;
         let servers: Vec<_> = enumerated.iter().map(|e| e.server.clone()).collect();
 
+        // Only servers actually enumerated take part in lock comparison: an
+        // unreachable one has an empty tool list, which must not read as "every
+        // tool was removed" — nor overwrite its baseline on --update-lock.
+        let observed: Vec<(ServerId, Vec<mcpwn::ToolManifest>)> = enumerated
+            .iter()
+            .filter(|e| e.outcome.is_enumerated())
+            .map(|e| (ServerId::from_manifest(&e.server), e.server.tools.clone()))
+            .collect();
+
+        let lock_path = args
+            .lock
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_LOCK_FILE));
+        let existing = self.read_lock(&lock_path, args.lock.is_some());
+
+        let mut registry = Registry::builtin();
+        if let Some(lock) = existing.clone() {
+            registry = registry.with_global_check(RugPullCheck::new(
+                lock,
+                observed.iter().map(|(id, _)| id.clone()).collect(),
+            ));
+        }
+
         let analyzer = Analyzer::with_config(AnalyzerConfig {
             target: Some(source.describe()),
             skip_global: false,
-        });
+        })
+        .with_registry(registry);
         let report = analyzer.analyze(&servers);
 
         let mut stdout = io::stdout().lock();
@@ -179,6 +224,7 @@ impl Cli {
         stdout.flush()?;
 
         self.emit_warnings(&loaded, &enumerated);
+        self.write_lock(args, &lock_path, existing, &observed)?;
 
         Ok(if report.is_empty() {
             exit::CLEAN
@@ -196,8 +242,9 @@ impl Cli {
                     .render(report, out)?;
                 writeln!(
                     out,
-                    "\nnote: capability analysis only; the other detection modules are not \
-                     implemented yet. Tools of stdio servers are never enumerated."
+                    "\nnote: capability, obfuscation and rug-pull analysis; poisoning, \
+                     shadowing and toxic flows are not implemented yet. Tools of stdio servers \
+                     are never enumerated."
                 )?;
             }
             Format::Sarif => writeln!(out, "{}", sarif::to_sarif_string(report)?)?,
@@ -219,19 +266,84 @@ impl Cli {
         }
     }
 
+    /// Load the lockfile, if there is a usable one.
+    ///
+    /// A corrupt or future-versioned lock is a warning, never a failure: the
+    /// rest of the scan is still worth running, and refusing to start would
+    /// leave the user with no output at all.
+    fn read_lock(&self, path: &Path, explicit: bool) -> Option<Lock> {
+        match Lock::load(path) {
+            Ok(Some(lock)) => Some(lock),
+            Ok(None) => {
+                if explicit {
+                    self.warn(&format!(
+                        "{}: no lockfile there yet; run with --write-lock to create one",
+                        path.display()
+                    ));
+                }
+                None
+            }
+            Err(err) => {
+                self.warn(&format!(
+                    "{err}. Continuing without rug-pull detection; delete the file and re-run                      with --write-lock, or fix it by hand"
+                ));
+                None
+            }
+        }
+    }
+
+    /// Write the lock, but only when explicitly asked to.
+    fn write_lock(
+        &self,
+        args: &ScanArgs,
+        path: &Path,
+        existing: Option<Lock>,
+        observed: &[(ServerId, Vec<mcpwn::ToolManifest>)],
+    ) -> Result<()> {
+        if !args.write_lock && !args.update_lock {
+            return Ok(());
+        }
+        if args.write_lock && existing.is_some() {
+            anyhow::bail!(
+                "{} already exists. Review the reported changes, then re-run with --update-lock                  to accept them.",
+                path.display()
+            );
+        }
+        if observed.is_empty() {
+            self.warn("no server was enumerated, so the lockfile was left untouched");
+            return Ok(());
+        }
+
+        let updated = existing
+            .unwrap_or_default()
+            .updated_from(observed, &lock::now_iso8601());
+        updated.save(path)?;
+
+        let tools: usize = observed.iter().map(|(_, t)| t.len()).sum();
+        eprintln!(
+            "lockfile {} written: {} server(s), {tools} tool(s)",
+            path.display(),
+            observed.len()
+        );
+        Ok(())
+    }
+
+    fn warn(&self, message: &str) {
+        if self.use_color_stderr() {
+            eprintln!("{} {message}", "warning:".yellow().bold());
+        } else {
+            eprintln!("warning: {message}");
+        }
+    }
+
     /// Unreadable, invalid or not-yet-parseable files are reported on stderr and
     /// never abort the run.
     fn emit_warnings(&self, loaded: &[LoadedConfig], servers: &[EnumeratedServer]) {
-        let color = self.use_color_stderr();
         let warnings = mcpwn::output::inventory::warnings(loaded)
             .into_iter()
             .chain(mcpwn::output::inventory::enumeration_warnings(servers));
         for warning in warnings {
-            if color {
-                eprintln!("{} {warning}", "warning:".yellow().bold());
-            } else {
-                eprintln!("warning: {warning}");
-            }
+            self.warn(&warning);
         }
     }
 

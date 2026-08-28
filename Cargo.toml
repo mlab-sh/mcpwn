@@ -29,6 +29,10 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 owo-colors = "4"
 ureq = { version = "3.4.0", default-features = false, features = ["rustls", "gzip"] }
+unicode-security = "0.1.2"
+unicode-script = "0.5.8"
+unicode-normalization = "0.1.25"
+sha2 = "0.11.0"
 
 [profile.release]
 lto = "thin"

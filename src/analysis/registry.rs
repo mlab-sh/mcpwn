@@ -6,6 +6,7 @@
 use super::capabilities::CapabilityCheck;
 use super::check::{GlobalCheck, ToolCheck};
 use super::flow::ToxicFlowCheck;
+use super::obfuscation::ObfuscationCheck;
 
 /// The checks to run, split by the level they operate at.
 #[derive(Debug, Default)]
@@ -26,6 +27,7 @@ impl Registry {
     pub fn builtin() -> Self {
         Self::empty()
             .with_tool_check(CapabilityCheck::new())
+            .with_tool_check(ObfuscationCheck::new())
             .with_global_check(ToxicFlowCheck::new())
     }
 

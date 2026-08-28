@@ -450,14 +450,18 @@ fn the_pipeline_aggregates_findings_across_tools_and_servers() {
 fn the_registry_carries_both_levels() {
     let registry = Registry::builtin();
 
-    assert_eq!(registry.tool_checks().count(), 1);
-    assert_eq!(
-        registry.global_checks().count(),
-        1,
+    // Asserted by name rather than by count: adding a check must not break
+    // this test, but losing one must.
+    assert!(registry.tool_checks().any(|c| c.id() == "capabilities"));
+    assert!(registry.tool_checks().any(|c| c.id() == "obfuscation"));
+    assert!(
+        registry.global_checks().any(|c| c.id() == "toxic-flow"),
         "the global level must be wired even while its checks are stubs"
     );
-    assert!(registry.tool_checks().any(|c| c.id() == "capabilities"));
-    assert!(registry.global_checks().any(|c| c.id() == "toxic-flow"));
+    assert!(
+        registry.tool_checks().all(|c| !c.description().is_empty()),
+        "every check must describe itself for --explain"
+    );
 }
 
 #[test]

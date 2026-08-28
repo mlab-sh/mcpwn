@@ -23,19 +23,24 @@ pub mod enumerate;
 pub mod error;
 pub mod finding;
 pub mod loading;
+pub mod lock;
 pub mod manifest;
 pub mod output;
 pub mod report;
 
 pub use analysis::capabilities::{Capability, CapabilityCheck};
 pub use analysis::check::{GlobalCheck, ScanContext, ToolCheck, ToolContext};
+pub use analysis::normalize::{normalize, Normalized, NoteKind};
+pub use analysis::obfuscation::ObfuscationCheck;
 pub use analysis::registry::Registry;
+pub use analysis::rugpull::RugPullCheck;
 pub use analyzer::{Analyzer, AnalyzerConfig};
 pub use discovery::{Client, ConfigFormat, DiscoveredConfig, Scope};
 pub use enumerate::{EnumeratedServer, Enumeration, StaticEnumerator};
 pub use error::{Error, Result};
 pub use finding::{Category, Confidence, Evidence, Finding, FindingId, Severity, Span};
 pub use loading::{LoadStatus, LoadedConfig};
+pub use lock::{Lock, LockedServer, LockedTool, ServerId, ToolChange};
 pub use manifest::{ServerManifest, ToolManifest, ToolRef, Transport};
 pub use report::{Report, ScanMeta};
 
