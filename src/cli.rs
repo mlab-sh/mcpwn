@@ -9,7 +9,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use owo_colors::OwoColorize;
 
 use mcpwn::output::{inventory::InventoryRenderer, render::TerminalRenderer, sarif};
-use mcpwn::{discovery, loading, Analyzer, AnalyzerConfig, DiscoveredConfig, LoadedConfig, Report};
+use mcpwn::{
+    discovery, enumerate, loading, Analyzer, AnalyzerConfig, DiscoveredConfig, EnumeratedServer,
+    LoadedConfig, Report, StaticEnumerator,
+};
 
 /// Static, offline security scanner for MCP servers.
 #[derive(Debug, Parser)]
@@ -58,6 +61,24 @@ pub struct ScanArgs {
     /// well-known per-user locations are scanned instead.
     #[arg(value_name = "PATH")]
     pub paths: Vec<PathBuf>,
+
+    /// Scan an MCP endpoint directly, skipping config discovery entirely.
+    /// Repeatable. Cannot be combined with a PATH.
+    #[arg(long, value_name = "URL", conflicts_with = "paths")]
+    pub url: Vec<String>,
+
+    /// Extra HTTP header, curl-style, sent to every HTTP server in the run.
+    /// Repeatable.
+    ///
+    /// Use it to reach an authenticated endpoint:
+    /// `-H "Authorization: Bearer $TOKEN"`.
+    ///
+    /// Note that a secret written on the command line is visible to every
+    /// process on the machine (`ps`) and lands in your shell history. Prefer
+    /// expanding it from an environment variable, and prefix the command with a
+    /// space if your shell is set up to skip those.
+    #[arg(short = 'H', long = "header", value_name = "NAME: VALUE")]
+    pub headers: Vec<String>,
 
     /// Output format.
     #[arg(short, long, value_enum, default_value_t = Format::Terminal)]
@@ -109,41 +130,55 @@ impl Cli {
     /// its output is an inventory rather than a security report, and it never
     /// returns the findings exit code. `scan` reuses the exact same two steps.
     fn discover(&self, args: &DiscoverArgs) -> Result<i32> {
-        let loaded = collect(&args.paths);
+        let (loaded, servers) = collect(&Source::Configs(&args.paths), Vec::new())?;
 
         let mut stdout = io::stdout().lock();
         match args.format {
             InventoryFormat::Terminal => {
-                InventoryRenderer::new()
+                let renderer = InventoryRenderer::new()
                     .color(self.use_color())
-                    .verbose(self.verbose)
-                    .render(&loaded, &mut stdout)?;
+                    .verbose(self.verbose);
+                renderer.render(&loaded, &mut stdout)?;
+                renderer.render_servers(&servers, &mut stdout)?;
             }
             InventoryFormat::Json => {
-                writeln!(stdout, "{}", serde_json::to_string_pretty(&loaded)?)?;
+                let payload = serde_json::json!({ "configs": loaded, "servers": servers });
+                writeln!(stdout, "{}", serde_json::to_string_pretty(&payload)?)?;
             }
         }
         stdout.flush()?;
 
-        self.emit_warnings(&loaded);
+        self.emit_warnings(&loaded, &servers);
         Ok(exit::CLEAN)
     }
 
     fn scan(&self, args: &ScanArgs) -> Result<i32> {
-        let loaded = collect(&args.paths);
-        let servers = loading::servers_of(&loaded);
+        let source = if args.url.is_empty() {
+            Source::Configs(&args.paths)
+        } else {
+            Source::Endpoints(&args.url)
+        };
+        let headers = enumerate::parse_headers(&args.headers)?;
+        let (loaded, enumerated) = collect(&source, headers)?;
+        let servers: Vec<_> = enumerated.iter().map(|e| e.server.clone()).collect();
 
         let analyzer = Analyzer::with_config(AnalyzerConfig {
-            target: Some(describe_target(&args.paths)),
+            target: Some(source.describe()),
             skip_flow: false,
         });
         let report = analyzer.analyze(&servers);
 
         let mut stdout = io::stdout().lock();
         self.emit(&report, args.format, &mut stdout)?;
+        if args.format == Format::Terminal {
+            InventoryRenderer::new()
+                .color(self.use_color())
+                .verbose(self.verbose)
+                .render_servers(&enumerated, &mut stdout)?;
+        }
         stdout.flush()?;
 
-        self.emit_warnings(&loaded);
+        self.emit_warnings(&loaded, &enumerated);
 
         Ok(if report.is_empty() {
             exit::CLEAN
@@ -186,9 +221,12 @@ impl Cli {
 
     /// Unreadable, invalid or not-yet-parseable files are reported on stderr and
     /// never abort the run.
-    fn emit_warnings(&self, loaded: &[LoadedConfig]) {
+    fn emit_warnings(&self, loaded: &[LoadedConfig], servers: &[EnumeratedServer]) {
         let color = self.use_color_stderr();
-        for warning in mcpwn::output::inventory::warnings(loaded) {
+        let warnings = mcpwn::output::inventory::warnings(loaded)
+            .into_iter()
+            .chain(mcpwn::output::inventory::enumeration_warnings(servers));
+        for warning in warnings {
             if color {
                 eprintln!("{} {warning}", "warning:".yellow().bold());
             } else {
@@ -206,33 +244,69 @@ impl Cli {
     }
 }
 
-/// Discovery + loading: the two steps every command shares.
+/// Where the servers to inspect come from.
 ///
-/// No path means global discovery; a path means project discovery under it.
-fn collect(paths: &[PathBuf]) -> Vec<LoadedConfig> {
-    let configs: Vec<DiscoveredConfig> = if paths.is_empty() {
-        discovery::discover_global()
-    } else {
-        let mut found: Vec<DiscoveredConfig> = paths
-            .iter()
-            .flat_map(|p| discovery::discover_project(Path::new(p)))
-            .collect();
-        found.sort();
-        found.dedup_by(|a, b| a.path == b.path);
-        found
-    };
-
-    loading::load_all(&configs)
+/// The two variants diverge only in how the server list is obtained; both
+/// converge on the same `Vec<ServerManifest>` and the same enumerator.
+enum Source<'a> {
+    /// Discover and load config files (no path = the global locations).
+    Configs(&'a [PathBuf]),
+    /// Endpoints named on the command line; discovery is skipped entirely.
+    Endpoints(&'a [String]),
 }
 
-fn describe_target(paths: &[PathBuf]) -> String {
-    if paths.is_empty() {
-        "(global MCP config locations)".to_owned()
-    } else {
-        paths
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
+impl Source<'_> {
+    fn describe(&self) -> String {
+        match self {
+            Source::Configs([]) => "(global MCP config locations)".to_owned(),
+            Source::Configs(paths) => paths
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            Source::Endpoints(urls) => urls.join(", "),
+        }
     }
+}
+
+/// Resolve a source into servers, then statically enumerate them.
+///
+/// Enumeration is static-only: HTTP servers are queried, stdio servers are
+/// never launched. Both sources reach the *same* `enumerate_all` call — a
+/// direct endpoint is turned into an ordinary `ServerManifest` first, so there
+/// is one enumeration path, not two.
+fn collect(
+    source: &Source<'_>,
+    headers: Vec<(String, String)>,
+) -> Result<(Vec<LoadedConfig>, Vec<EnumeratedServer>)> {
+    let (loaded, servers) = match source {
+        Source::Configs(paths) => {
+            let configs: Vec<DiscoveredConfig> = if paths.is_empty() {
+                discovery::discover_global()
+            } else {
+                let mut found: Vec<DiscoveredConfig> = paths
+                    .iter()
+                    .flat_map(|p| discovery::discover_project(Path::new(p)))
+                    .collect();
+                found.sort();
+                found.dedup_by(|a, b| a.path == b.path);
+                found
+            };
+            let loaded = loading::load_all(&configs);
+            let servers = loading::servers_of(&loaded);
+            (loaded, servers)
+        }
+        Source::Endpoints(urls) => {
+            // Validate every URL before touching the network, so a typo in the
+            // third one does not surface after two requests have gone out.
+            let servers = urls
+                .iter()
+                .map(|url| enumerate::server_from_url(url))
+                .collect::<mcpwn::Result<Vec<_>>>()?;
+            (Vec::new(), servers)
+        }
+    };
+
+    let enumerator = StaticEnumerator::new().headers(headers);
+    Ok((loaded, enumerator.enumerate_all(servers)))
 }

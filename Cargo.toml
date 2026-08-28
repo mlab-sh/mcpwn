@@ -2,7 +2,7 @@
 name = "mcpwn"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.85"
 description = "Static, offline security scanner for MCP (Model Context Protocol) servers."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Sn0wAlice/mcpwn"
@@ -28,6 +28,7 @@ thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 owo-colors = "4"
+ureq = { version = "3.4.0", default-features = false, features = ["rustls", "gzip"] }
 
 [profile.release]
 lto = "thin"

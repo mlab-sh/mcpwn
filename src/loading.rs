@@ -285,24 +285,7 @@ fn json_type_name(value: &Value) -> &'static str {
     }
 }
 
-// ---------------------------------------------------------------------------
-// TODO: tool enumeration — deliberately NOT implemented here.
-// ---------------------------------------------------------------------------
-
-/// Fill in a server's `tools` by asking the server what it exposes.
-///
-/// **Not implemented.** Config files say how to *launch* a server, never what
-/// it exposes, so [`ServerManifest::tools`] is always empty after loading. Every
-/// route to the tool list is a separate design decision:
-///
-/// * spawning the server and issuing `tools/list` — that is no longer a static,
-///   offline scan and needs an explicit opt-in flag and a sandbox;
-/// * reading a vendored manifest shipped by the package (no standard location yet);
-/// * replaying a `tools/list` capture from disk — see
-///   [`crate::manifest::parse_tools_list`], the likely first implementation.
-///
-/// Until one lands, the detection modules receive servers with no tools and
-/// therefore report nothing.
-pub fn enumerate_tools(_server: &mut ServerManifest) -> crate::Result<()> {
-    todo!("enumerate_tools: decide between offline capture replay and opt-in live tools/list")
-}
+// Tool enumeration lives in [`crate::enumerate`]: config files say how to
+// *launch* a server, never what it exposes, so `ServerManifest::tools` is always
+// empty after loading. Filling it in is a separate step with its own safety
+// rule (no local process is ever spawned).

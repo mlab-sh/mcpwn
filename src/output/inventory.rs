@@ -5,6 +5,7 @@ use std::io::{self, Write};
 
 use owo_colors::{OwoColorize, Style};
 
+use crate::enumerate::{EnumeratedServer, Enumeration};
 use crate::loading::{LoadStatus, LoadedConfig};
 
 /// Renders the result of `mcpwn discover`.
@@ -72,6 +73,59 @@ impl InventoryRenderer {
         }
 
         self.summary(loaded, out)
+    }
+
+    /// The per-server enumeration table shown under the config table.
+    pub fn render_servers<W: Write>(
+        &self,
+        servers: &[EnumeratedServer],
+        out: &mut W,
+    ) -> io::Result<()> {
+        if servers.is_empty() {
+            return Ok(());
+        }
+
+        let name_width = servers
+            .iter()
+            .map(|s| s.server.name.len())
+            .max()
+            .unwrap_or(0);
+
+        writeln!(out, "\nservers")?;
+        for entry in servers {
+            let status = match &entry.outcome {
+                Enumeration::Enumerated { protocol } => self.paint(
+                    format!("{} tool(s) via {protocol}", entry.tool_count()),
+                    Style::new().green(),
+                ),
+                Enumeration::NotPossible { reason } => {
+                    self.paint(reason.clone(), Style::new().dimmed())
+                }
+                Enumeration::Failed { reason } => self.paint(reason.clone(), Style::new().red()),
+            };
+            writeln!(
+                out,
+                "  {:<name_width$}  {}",
+                entry.server.name,
+                status,
+                name_width = name_width
+            )?;
+
+            if self.verbose {
+                for tool in &entry.server.tools {
+                    let summary: String = tool
+                        .description
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .chars()
+                        .take(72)
+                        .collect();
+                    writeln!(out, "      {} — {}", tool.name, summary)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn row<W: Write>(
@@ -157,6 +211,18 @@ pub fn warnings(loaded: &[LoadedConfig]) -> Vec<String> {
                 LoadStatus::Unsupported { reason } => Some(format!("{path}: {reason}")),
                 LoadStatus::Skipped { reason } => Some(format!("{path}: {reason}")),
             }
+        })
+        .collect()
+}
+
+/// Enumeration warnings. A stdio server is *not* one of these: not enumerating
+/// it is the intended behaviour, not a problem.
+pub fn enumeration_warnings(servers: &[EnumeratedServer]) -> Vec<String> {
+    servers
+        .iter()
+        .filter_map(|entry| match &entry.outcome {
+            Enumeration::Failed { reason } => Some(format!("{}: {reason}", entry.server.name)),
+            Enumeration::Enumerated { .. } | Enumeration::NotPossible { .. } => None,
         })
         .collect()
 }

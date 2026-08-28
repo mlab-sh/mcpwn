@@ -5,51 +5,14 @@
 //! config silently load as zero servers.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use mcpwn::discovery::{self, Client, ConfigFormat, HomeLayout, Scope};
 use mcpwn::loading::{self, LoadStatus};
 use mcpwn::manifest::Transport;
 
-// --- temp dir helper (no dev-dependency) -----------------------------------
-
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new(tag: &str) -> Self {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-        let unique = format!(
-            "mcpwn-test-{}-{}-{}",
-            tag,
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
-        let path = std::env::temp_dir().join(unique);
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).expect("create temp dir");
-        Self(path)
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-
-    /// Write `contents` to `rel`, creating parent directories.
-    fn write(&self, rel: &str, contents: &str) -> PathBuf {
-        let path = self.0.join(rel);
-        fs::create_dir_all(path.parent().expect("has parent")).expect("create parents");
-        fs::write(&path, contents).expect("write fixture");
-        path
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
+mod common;
+use common::TempDir;
 
 // --- fixtures ---------------------------------------------------------------
 

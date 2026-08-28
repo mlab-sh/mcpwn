@@ -19,6 +19,7 @@
 pub mod analysis;
 pub mod analyzer;
 pub mod discovery;
+pub mod enumerate;
 pub mod error;
 pub mod finding;
 pub mod loading;
@@ -28,6 +29,7 @@ pub mod report;
 
 pub use analyzer::{Analyzer, AnalyzerConfig};
 pub use discovery::{Client, ConfigFormat, DiscoveredConfig, Scope};
+pub use enumerate::{EnumeratedServer, Enumeration, StaticEnumerator};
 pub use error::{Error, Result};
 pub use finding::{Category, Confidence, Evidence, Finding, FindingId, Severity, Span};
 pub use loading::{LoadStatus, LoadedConfig};

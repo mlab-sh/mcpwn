@@ -15,6 +15,19 @@ pub enum Error {
         source_hint: Option<String>,
     },
 
+    /// An endpoint URL given on the command line is not usable.
+    #[error("invalid endpoint `{url}`: {message}")]
+    Endpoint { url: String, message: String },
+
+    /// A `--header` argument could not be used.
+    ///
+    /// Deliberately never echoes the header *value*: it is usually a secret.
+    #[error("invalid header{}: {message}", .name.as_deref().map(|n| format!(" `{n}`")).unwrap_or_default())]
+    Header {
+        name: Option<String>,
+        message: String,
+    },
+
     /// A rule set failed to compile.
     #[error("invalid rule set: {0}")]
     Rules(String),
@@ -29,6 +42,20 @@ pub enum Error {
 }
 
 impl Error {
+    pub fn endpoint(url: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Endpoint {
+            url: url.into(),
+            message: message.into(),
+        }
+    }
+
+    pub fn header(name: Option<String>, message: impl Into<String>) -> Self {
+        Self::Header {
+            name,
+            message: message.into(),
+        }
+    }
+
     pub fn manifest(message: impl Into<String>) -> Self {
         Self::Manifest {
             message: message.into(),
