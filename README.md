@@ -55,7 +55,7 @@ Exit codes: `0` clean, `1` findings at or above the threshold, `2` error.
 
 ## What it detects
 
-19 rules. `mcpwn explain` lists them all; `mcpwn explain <ID>` gives the detail.
+22 rules. `mcpwn explain` lists them all; `mcpwn explain <ID>` gives the detail.
 
 | Family | Rules | What |
 |---|---|---|
@@ -63,6 +63,7 @@ Exit codes: `0` clean, `1` findings at or above the threshold, `2` error.
 | Capability | `MCPWN-CAP-001..005` | Command execution, code evaluation, filesystem and network access, `x-mcp-header` mirroring |
 | Obfuscation | `MCPWN-OBF-001..006` | Unicode tag characters, zero-width characters, bidi overrides, homoglyphs, encoded payloads |
 | Rug pull | `MCPWN-RUG-001..003` | Tools that changed, disappeared or appeared since the lockfile |
+| Shadowing | `MCPWN-SHA-001..003` | Colliding tool names, look-alike names, a server giving instructions about another server's tool |
 | Toxic flow | `MCPWN-FLOW-001` | An ingest, a source and a sink coexisting in one environment |
 
 ## Rug pull detection
@@ -126,7 +127,7 @@ discovered and listed, but reported as not yet parseable.
   configuration checks apply to them.
 * Enumerating a remote server is a network request. The analysis is static; the
   tool list has to come from somewhere.
-* Tool poisoning and shadowing detection are not implemented yet.
+* Tool poisoning detection is not implemented yet.
 
 ## Development
 

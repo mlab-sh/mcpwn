@@ -94,7 +94,15 @@ fn an_invalid_url_is_a_clean_error() {
 #[test]
 fn several_urls_are_scanned_in_one_run() {
     let a = spawn_mock(|_| json_200(TOOLS_RESULT));
-    let b = spawn_mock(|_| json_200(TOOLS_RESULT));
+    // Distinct names, so this stays a test about scanning two endpoints rather
+    // than about the name collision two identical servers would produce.
+    let b = spawn_mock(|_| {
+        json_200(
+            &TOOLS_RESULT
+                .replace("read_file", "list_dir")
+                .replace("send_email", "post_note"),
+        )
+    });
 
     let output = mcpwn(&["scan", "--url", &a, "--url", &b, "--no-color"]);
     let out = stdout(&output);
@@ -104,6 +112,18 @@ fn several_urls_are_scanned_in_one_run() {
         out.contains("2 server(s), 4 tool(s) analysed"),
         "got:\n{out}"
     );
+}
+
+#[test]
+fn two_endpoints_exposing_the_same_tool_names_collide() {
+    let a = spawn_mock(|_| json_200(TOOLS_RESULT));
+    let b = spawn_mock(|_| json_200(TOOLS_RESULT));
+
+    let output = mcpwn(&["scan", "--url", &a, "--url", &b, "--no-color"]);
+    let out = stdout(&output);
+
+    assert!(out.contains("MCPWN-SHA-001"), "got:\n{out}");
+    assert_eq!(output.status.code(), Some(1));
 }
 
 #[test]

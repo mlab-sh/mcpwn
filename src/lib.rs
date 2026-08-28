@@ -37,6 +37,7 @@ pub use analysis::normalize::{normalize, Normalized, NoteKind};
 pub use analysis::obfuscation::ObfuscationCheck;
 pub use analysis::registry::Registry;
 pub use analysis::rugpull::RugPullCheck;
+pub use analysis::shadowing::ShadowingCheck;
 pub use analyzer::{Analyzer, AnalyzerConfig};
 pub use discovery::{Client, ConfigFormat, DiscoveredConfig, Scope};
 pub use enumerate::{EnumeratedServer, Enumeration, StaticEnumerator};
