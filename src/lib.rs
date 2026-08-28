@@ -18,16 +18,20 @@
 
 pub mod analysis;
 pub mod analyzer;
+pub mod discovery;
 pub mod error;
 pub mod finding;
+pub mod loading;
 pub mod manifest;
 pub mod output;
 pub mod report;
 
 pub use analyzer::{Analyzer, AnalyzerConfig};
+pub use discovery::{Client, ConfigFormat, DiscoveredConfig, Scope};
 pub use error::{Error, Result};
 pub use finding::{Category, Confidence, Evidence, Finding, FindingId, Severity, Span};
-pub use manifest::{ServerManifest, ToolManifest, ToolRef};
+pub use loading::{LoadStatus, LoadedConfig};
+pub use manifest::{ServerManifest, ToolManifest, ToolRef, Transport};
 pub use report::{Report, ScanMeta};
 
 /// Version of the scanner, stamped into every report.

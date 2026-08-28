@@ -4,6 +4,8 @@
 //! capture, ...) is **not implemented yet** — only the shape is fixed here so
 //! the rest of the engine can be written against it.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -44,6 +46,10 @@ pub enum Transport {
         command: String,
         #[serde(default)]
         args: Vec<String>,
+        /// Environment overrides declared in the config. `BTreeMap` so the
+        /// order is stable in reports.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        env: BTreeMap<String, String>,
     },
     /// Remote HTTP / SSE endpoint.
     Http { url: String },
@@ -110,16 +116,27 @@ impl ToolManifest {
     }
 }
 
-/// Parse a set of server manifests out of a raw client config document.
-///
-/// Not implemented yet.
-pub fn parse_client_config(_raw: &str) -> crate::Result<Vec<ServerManifest>> {
-    todo!("manifest: parse MCP client config into ServerManifest values")
+impl Transport {
+    /// Short description used in inventory output.
+    pub fn summary(&self) -> String {
+        match self {
+            Transport::Stdio { command, args, .. } => {
+                if args.is_empty() {
+                    command.clone()
+                } else {
+                    format!("{} {}", command, args.join(" "))
+                }
+            }
+            Transport::Http { url } => url.clone(),
+            Transport::Unknown => "(unknown transport)".to_owned(),
+        }
+    }
 }
 
 /// Parse a captured `tools/list` response into a server manifest.
 ///
-/// Not implemented yet.
+/// Not implemented yet: see [`crate::loading::enumerate_tools`] for why tool
+/// enumeration is a separate step from config loading.
 pub fn parse_tools_list(_server: &str, _raw: &str) -> crate::Result<ServerManifest> {
     todo!("manifest: parse a tools/list capture into a ServerManifest")
 }
