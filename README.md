@@ -61,7 +61,7 @@ Exit codes: `0` clean, `1` findings at or above the threshold, `2` error.
 
 ## What it detects
 
-22 rules. `mcpwn explain` lists them all; `mcpwn explain <ID>` gives the detail.
+28 rules. `mcpwn explain` lists them all; `mcpwn explain <ID>` gives the detail.
 
 | Family | Rules | What |
 |---|---|---|
@@ -71,6 +71,26 @@ Exit codes: `0` clean, `1` findings at or above the threshold, `2` error.
 | Rug pull | `MCPWN-RUG-001..003` | Tools that changed, disappeared or appeared since the lockfile |
 | Shadowing | `MCPWN-SHA-001..003` | Colliding tool names, look-alike names, a server giving instructions about another server's tool |
 | Toxic flow | `MCPWN-FLOW-001` | An ingest, a source and a sink coexisting in one environment |
+| Reconnaissance | `MCPWN-NET-001..006` | Needs `--probe`: unenforced credentials, missing auth discovery, deprecated transport, plaintext downgrade, unvalidated protocol and headers |
+
+## Probing an endpoint
+
+`--probe` asks a remote endpoint the questions enumeration does not: does it
+need the credential it was given, how does it advertise authentication, what
+else does it serve, and does it validate the protocol as the specification
+requires.
+
+```bash
+mcpwn scan --url https://example.com/mcp --probe
+```
+
+```bash
+mcpwn view --url https://example.com/mcp --probe
+```
+
+Read-only: no tool is ever called and nothing is written. It still sends extra
+requests and touches paths you did not name, so it is off by default. Point it
+only at servers you are entitled to examine.
 
 ## Rug pull detection
 

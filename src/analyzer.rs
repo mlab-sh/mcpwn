@@ -8,6 +8,7 @@
 use crate::analysis::check::ScanContext;
 use crate::analysis::registry::Registry;
 use crate::manifest::ServerManifest;
+use crate::recon::ServerProbe;
 use crate::report::{Report, ScanMeta};
 
 /// Knobs that change what the engine reports.
@@ -24,6 +25,8 @@ pub struct AnalyzerConfig {
 pub struct Analyzer {
     config: AnalyzerConfig,
     registry: Registry,
+    /// Read-only reconnaissance results, empty unless `--probe` was passed.
+    probes: Vec<ServerProbe>,
 }
 
 impl Default for Analyzer {
@@ -41,7 +44,14 @@ impl Analyzer {
         Self {
             config,
             registry: Registry::builtin(),
+            probes: Vec::new(),
         }
+    }
+
+    /// Attach what the reconnaissance pass observed.
+    pub fn with_probes(mut self, probes: Vec<ServerProbe>) -> Self {
+        self.probes = probes;
+        self
     }
 
     /// Replace the check set: used by tests to exercise one check alone.
@@ -60,7 +70,7 @@ impl Analyzer {
     /// check could in principle consider what the per-tool pass produced. Every
     /// finding lands in the same [`Report`], sorted most severe first.
     pub fn analyze(&self, servers: &[ServerManifest]) -> Report {
-        let ctx = ScanContext::new(servers);
+        let ctx = ScanContext::new(servers).with_probes(&self.probes);
 
         let mut meta = ScanMeta::new(self.config.target.clone());
         meta.servers = servers.len();

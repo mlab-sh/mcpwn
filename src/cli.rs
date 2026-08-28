@@ -16,6 +16,7 @@ use mcpwn::output::{
     explain::ExplainRenderer, inventory::InventoryRenderer, render::TerminalRenderer, sarif,
 };
 use mcpwn::policy::{Policy, DEFAULT_POLICY_FILE};
+use mcpwn::recon::{Prober, ServerProbe};
 use mcpwn::{
     discovery, enumerate, loading, Analyzer, AnalyzerConfig, DiscoveredConfig, EnumeratedServer,
     LoadedConfig, Report, StaticEnumerator,
@@ -108,6 +109,12 @@ pub struct ViewArgs {
     #[arg(short, long, value_name = "SUBSTRING")]
     pub tool: Option<String>,
 
+    /// Also probe each HTTP endpoint for what it reveals about itself.
+    /// Read-only, but it sends extra requests and touches paths you did not
+    /// name, so it is off by default.
+    #[arg(long)]
+    pub probe: bool,
+
     /// Output format.
     #[arg(short, long, value_enum, default_value_t = InventoryFormat::Terminal)]
     pub format: InventoryFormat,
@@ -137,6 +144,16 @@ pub struct ScanArgs {
     /// space if your shell is set up to skip those.
     #[arg(short = 'H', long = "header", value_name = "NAME: VALUE")]
     pub headers: Vec<String>,
+
+    /// Probe each HTTP endpoint for what it reveals about itself: whether it
+    /// needs the credential it was given, how it advertises authentication,
+    /// what else it serves, and whether it validates the protocol.
+    ///
+    /// Read-only, and no tool is ever called. It still sends extra requests and
+    /// touches paths you did not name, so it is off by default. Point it only
+    /// at servers you are entitled to examine.
+    #[arg(long)]
+    pub probe: bool,
 
     /// Path to the lockfile used for rug-pull detection.
     ///
@@ -280,19 +297,22 @@ impl Cli {
             Source::Endpoints(&args.url)
         };
         let headers = enumerate::parse_headers(&args.headers)?;
-        let (loaded, enumerated) = collect(&source, headers)?;
+        let (loaded, enumerated) = collect(&source, headers.clone())?;
+        let probes = probe(args.probe, &enumerated, headers);
 
         let mut stdout = io::stdout().lock();
         match args.format {
             InventoryFormat::Terminal => {
                 mcpwn::output::view::ViewRenderer::new()
+                    .probes(probes.clone())
                     .color(self.use_color())
                     .verbose(self.verbose)
                     .filter(args.tool.clone())
                     .render(&enumerated, &mut stdout)?;
             }
             InventoryFormat::Json => {
-                writeln!(stdout, "{}", serde_json::to_string_pretty(&enumerated)?)?;
+                let payload = serde_json::json!({ "servers": enumerated, "probes": probes });
+                writeln!(stdout, "{}", serde_json::to_string_pretty(&payload)?)?;
             }
         }
         stdout.flush()?;
@@ -308,8 +328,9 @@ impl Cli {
             Source::Endpoints(&args.url)
         };
         let headers = enumerate::parse_headers(&args.headers)?;
-        let (loaded, enumerated) = collect(&source, headers)?;
+        let (loaded, enumerated) = collect(&source, headers.clone())?;
         let servers: Vec<_> = enumerated.iter().map(|e| e.server.clone()).collect();
+        let probes = probe(args.probe, &enumerated, headers);
 
         // Only servers actually enumerated take part in lock comparison: an
         // unreachable one has an empty tool list, which must not read as "every
@@ -338,7 +359,8 @@ impl Cli {
             target: Some(source.describe()),
             skip_global: false,
         })
-        .with_registry(registry);
+        .with_registry(registry)
+        .with_probes(probes);
         let mut report = analyzer.analyze(&servers);
 
         let policy = self.read_policy(args)?;
@@ -686,4 +708,26 @@ fn collect(
 
     let enumerator = StaticEnumerator::new().headers(headers);
     Ok((loaded, enumerator.enumerate_all(servers)))
+}
+
+/// Run the read-only reconnaissance pass, when asked for.
+///
+/// Only servers that were actually reached are probed: there is nothing to
+/// learn from an endpoint that did not answer, and no reason to knock again.
+fn probe(
+    enabled: bool,
+    enumerated: &[EnumeratedServer],
+    headers: Vec<(String, String)>,
+) -> Vec<ServerProbe> {
+    if !enabled {
+        return Vec::new();
+    }
+    let prober = Prober::new().headers(headers);
+    enumerated
+        .iter()
+        .filter_map(|entry| match entry.server.transport.as_ref() {
+            Some(mcpwn::Transport::Http { url }) => Some(prober.probe(url)),
+            _ => None,
+        })
+        .collect()
 }

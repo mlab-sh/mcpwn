@@ -391,6 +391,167 @@ The finding redacts the userinfo before printing the URL.",
         remediation: "Send the credential in an Authorization header instead of the URL.",
         expected_noise: "None expected; this is unusual in a well-formed configuration.",
     },
+    // --- reconnaissance -----------------------------------------------------
+    RuleDoc {
+        id: "MCPWN-NET-001",
+        title: "The endpoint answers without the credential it was given",
+        category: Category::Capability,
+        severity: Severity::High,
+        check: "network",
+        summary: "A credential was supplied, and the server returns its tool list without it.",
+        detail: "\
+The scan sent `tools/list` with no credentials at all and got the full tool \
+list back, even though a credential was supplied with `-H`. Either it is not \
+needed on this method, or it is not checked.
+
+Anyone who knows the URL can therefore read every tool name, description and \
+input schema the server exposes: its whole attack surface, and often the shape \
+of the systems behind it.
+
+Only reported when a credential **was** supplied. A server that is simply public \
+is not a finding, and reporting one would flag every public documentation server \
+in existence. The finding is the gap between what the operator believes is \
+protected and what is.
+
+Requires `--probe`.",
+        example: None,
+        remediation: "\
+Confirm which methods are meant to be reachable anonymously. If the answer is \
+none, the credential is not being enforced.",
+        expected_noise: "\
+A server that deliberately serves `tools/list` to everyone and gates only \
+`tools/call` will fire. That design is defensible, but the exposure is real and \
+worth having stated.",
+    },
+    RuleDoc {
+        id: "MCPWN-NET-002",
+        title: "Protected endpoint with no authentication discovery",
+        category: Category::Capability,
+        severity: Severity::Low,
+        check: "network",
+        summary: "A 401 with no WWW-Authenticate and no protected-resource metadata.",
+        detail: "\
+The endpoint refuses unauthenticated requests but gives no machine-readable way \
+to find out how to authenticate: no `WWW-Authenticate` header, and no \
+`/.well-known/oauth-protected-resource`.
+
+The consequence is mundane and reliable. Every integration ends up hard-coding a \
+credential handed over out of band, and that is how tokens end up written into \
+configuration files, which is what `MCPWN-CFG-001` then finds.
+
+Requires `--probe`.",
+        example: None,
+        remediation: "\
+Return `WWW-Authenticate` on a 401 pointing at the resource metadata, as the \
+specification's authorization flow expects.",
+        expected_noise: "\
+Servers using a simple API key rather than OAuth will fire. Low severity for \
+that reason: it is a missing convention, not a hole.",
+    },
+    RuleDoc {
+        id: "MCPWN-NET-003",
+        title: "Deprecated HTTP+SSE transport still served",
+        category: Category::Capability,
+        severity: Severity::Medium,
+        check: "network",
+        summary: "The 2024-11-05 transport answers alongside the modern endpoint.",
+        detail: "\
+A `GET` to `/sse` on the same origin returns an event stream, which means the \
+HTTP+SSE transport is still live. It has been deprecated since protocol revision \
+2025-03-26.
+
+A client that falls back to it, or is made to fall back to it, negotiates an \
+older protocol and loses everything the newer revisions added. Most concretely it \
+loses the header validation that stops an intermediary and the server disagreeing \
+about what a request is, which is what `MCPWN-NET-006` is about.
+
+Requires `--probe`.",
+        example: Some("Streamable HTTP at https://example.com/mcp, HTTP+SSE still up at https://example.com/sse"),
+        remediation: "Retire the SSE endpoint once no client depends on it.",
+        expected_noise: "\
+Servers keeping it up deliberately for older clients will fire. That is the \
+trade-off being pointed at, not a mistake.",
+    },
+    RuleDoc {
+        id: "MCPWN-NET-004",
+        title: "The endpoint also answers over plaintext HTTP",
+        category: Category::Capability,
+        severity: Severity::High,
+        check: "network",
+        summary: "An https endpoint that serves the same protocol on http, without redirecting.",
+        detail: "\
+The configuration says https, and the same host and path answer over http \
+without redirecting. The encryption is therefore optional rather than enforced.
+
+Anything that can influence which URL a client uses, a copied configuration, a \
+rewritten link, a stale bookmark, gets a session it can both read and modify. The \
+reading half leaks tool arguments and credentials; the writing half is worse, \
+because a tampered `tools/list` response is tool poisoning that needs no \
+compromised server at all.
+
+The probe sends **no credentials** to the plaintext endpoint: finding out that \
+http works is not worth handing a token to whoever is listening.
+
+Requires `--probe`.",
+        example: None,
+        remediation: "Redirect http to https, or stop listening on the plaintext port entirely.",
+        expected_noise: "\
+A redirect to https is the correct answer and is not reported. Only a plaintext \
+port that actually serves the protocol is.",
+    },
+    RuleDoc {
+        id: "MCPWN-NET-005",
+        title: "The protocol version is not validated",
+        category: Category::Capability,
+        severity: Severity::Medium,
+        check: "network",
+        summary: "The server answers normally to a protocol version no server can implement.",
+        detail: "\
+The probe declared protocol version `1900-01-01`, which cannot exist. The \
+specification requires an `UnsupportedProtocolVersion` error listing what the \
+server does support. This server answered normally instead, so it never looked.
+
+That means it serves every request without knowing which revision it was written \
+against. A client and this server can disagree about what a field means, or \
+whether a field is even allowed, with nothing in the protocol to catch it. It \
+also removes the negotiation path a client uses to find a version they share.
+
+Requires `--probe`.",
+        example: Some("MCP-Protocol-Version: 1900-01-01 returns a tools/list result instead of error -32022"),
+        remediation: "\
+Reject unknown protocol versions with error -32022, listing the versions \
+supported.",
+        expected_noise: "\
+Servers written against a revision that predates the header will fire. They are \
+still not validating anything.",
+    },
+    RuleDoc {
+        id: "MCPWN-NET-006",
+        title: "Request headers are not validated against the body",
+        category: Category::Capability,
+        severity: Severity::Medium,
+        check: "network",
+        summary: "An Mcp-Method header contradicting the body is accepted.",
+        detail: "\
+The probe sent a request whose `Mcp-Method` header said `tools/call` while its \
+body said `tools/list`. The specification requires a `HeaderMismatch` error \
+(-32020), and states the reason directly: the transport mirrors body fields into \
+headers so that gateways, load balancers and rate limiters can route and \
+authorise without parsing the body.
+
+Where the two are allowed to disagree, a request can be authorised as one thing \
+by the infrastructure and executed as another by the server. That is not a \
+theoretical split: it is the whole reason the mirroring exists.
+
+Requires `--probe`.",
+        example: Some("Mcp-Method: tools/call over a tools/list body returns a result instead of error -32020"),
+        remediation: "\
+Reject a header that disagrees with the body with error -32020, as the transport \
+requires.",
+        expected_noise: "\
+Servers predating the 2026-07-28 header requirement will fire. Any intermediary \
+in front of them is routing on values nothing verifies.",
+    },
     // --- rug pull -----------------------------------------------------------
     RuleDoc {
         id: "MCPWN-RUG-001",

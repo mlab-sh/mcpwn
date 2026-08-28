@@ -10,7 +10,8 @@ use owo_colors::{OwoColorize, Style};
 
 use crate::analysis::schema::{self, Param};
 use crate::enumerate::{EnumeratedServer, Enumeration};
-use crate::manifest::ToolManifest;
+use crate::manifest::{ToolManifest, Transport};
+use crate::recon::ServerProbe;
 
 /// Width the prose is wrapped to. Descriptions are the whole point of this
 /// command, so they are wrapped rather than truncated.
@@ -23,6 +24,7 @@ pub struct ViewRenderer {
     verbose: bool,
     /// Show only tools whose name contains this, case-insensitively.
     filter: Option<String>,
+    probes: Vec<ServerProbe>,
 }
 
 impl Default for ViewRenderer {
@@ -31,6 +33,7 @@ impl Default for ViewRenderer {
             color: true,
             verbose: false,
             filter: None,
+            probes: Vec::new(),
         }
     }
 }
@@ -54,6 +57,19 @@ impl ViewRenderer {
     pub fn filter(mut self, filter: Option<String>) -> Self {
         self.filter = filter.map(|f| f.to_lowercase());
         self
+    }
+
+    /// What the optional reconnaissance pass observed.
+    pub fn probes(mut self, probes: Vec<ServerProbe>) -> Self {
+        self.probes = probes;
+        self
+    }
+
+    fn probe_for(&self, entry: &EnumeratedServer) -> Option<&ServerProbe> {
+        let Some(Transport::Http { url }) = entry.server.transport.as_ref() else {
+            return None;
+        };
+        self.probes.iter().find(|p| &p.endpoint == url)
     }
 
     pub fn render<W: Write>(&self, servers: &[EnumeratedServer], out: &mut W) -> io::Result<()> {
@@ -114,6 +130,10 @@ impl ViewRenderer {
             }
         }
 
+        if let Some(probe) = self.probe_for(entry) {
+            self.probe_lines(probe, out)?;
+        }
+
         let tools: Vec<&ToolManifest> = entry
             .server
             .tools
@@ -129,6 +149,46 @@ impl ViewRenderer {
             self.tool(tool, out)?;
         }
         Ok(tools.len())
+    }
+
+    /// The facts the reconnaissance pass gathered, stated plainly. Whether any
+    /// of them is a problem is `scan`'s answer, not this command's.
+    fn probe_lines<W: Write>(&self, probe: &ServerProbe, out: &mut W) -> io::Result<()> {
+        let mut lines: Vec<String> = Vec::new();
+
+        if let Some(status) = probe.anonymous_status {
+            let anonymous = match probe.anonymous_tools_list {
+                Some(true) => "answers tools/list with no credentials",
+                Some(false) => "refuses tools/list with no credentials",
+                None => "did not answer an anonymous request",
+            };
+            lines.push(format!("{anonymous} (HTTP {status})"));
+        }
+        if !probe.supported_versions.is_empty() {
+            lines.push(format!(
+                "supports MCP {}",
+                probe.supported_versions.join(", ")
+            ));
+        }
+        if let Some(endpoint) = &probe.legacy_sse_endpoint {
+            lines.push(format!(
+                "also serves the deprecated HTTP+SSE transport at {endpoint}"
+            ));
+        }
+        if let Some(endpoint) = &probe.plaintext_endpoint {
+            lines.push(format!("also answers over plaintext at {endpoint}"));
+        }
+        if probe.accepts_impossible_version == Some(true) {
+            lines.push("does not validate the protocol version".to_owned());
+        }
+        if probe.accepts_header_mismatch == Some(true) {
+            lines.push("does not validate headers against the body".to_owned());
+        }
+
+        for line in lines {
+            writeln!(out, "  {}", self.paint(line, Style::new().dimmed()))?;
+        }
+        Ok(())
     }
 
     fn tool<W: Write>(&self, tool: &ToolManifest, out: &mut W) -> io::Result<()> {

@@ -7,6 +7,7 @@ use super::capabilities::CapabilityCheck;
 use super::check::{GlobalCheck, ServerCheck, ToolCheck};
 use super::config::{PinningCheck, SecretsCheck, TransportCheck};
 use super::flow::ToxicFlowCheck;
+use super::network::NetworkCheck;
 use super::obfuscation::ObfuscationCheck;
 use super::shadowing::ShadowingCheck;
 
@@ -34,6 +35,7 @@ impl Registry {
             .with_server_check(SecretsCheck::new())
             .with_server_check(PinningCheck::new())
             .with_server_check(TransportCheck::new())
+            .with_server_check(NetworkCheck::new())
             .with_global_check(ShadowingCheck::new())
             .with_global_check(ToxicFlowCheck::new())
     }

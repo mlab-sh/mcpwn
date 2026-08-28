@@ -213,8 +213,13 @@ fn view_json_is_machine_readable() {
     let output = mcpwn(&["view", "--url", &url, "--format", "json"]);
     let parsed: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("valid json");
 
-    assert_eq!(parsed[0]["server"]["tools"][0]["name"], "read_file");
-    assert_eq!(parsed[0]["enumeration"], "enumerated");
+    assert_eq!(
+        parsed["servers"][0]["server"]["tools"][0]["name"],
+        "read_file"
+    );
+    assert_eq!(parsed["servers"][0]["enumeration"], "enumerated");
+    // The probe key is always present; it is empty unless --probe was passed.
+    assert_eq!(parsed["probes"].as_array().map(Vec::len), Some(0));
 }
 
 #[test]

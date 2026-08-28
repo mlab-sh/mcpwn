@@ -14,20 +14,42 @@
 
 use crate::finding::Finding;
 use crate::manifest::{ServerManifest, ToolManifest, ToolRef};
+use crate::recon::ServerProbe;
 
 /// Everything the analysers may look at: the whole scanned surface.
 #[derive(Debug, Clone, Copy)]
 pub struct ScanContext<'a> {
     servers: &'a [ServerManifest],
+    /// What the optional `--probe` pass observed, keyed by endpoint URL. Empty
+    /// unless probing was asked for, which is why every check that reads it
+    /// must treat its absence as "not measured" rather than "nothing found".
+    probes: &'a [ServerProbe],
 }
 
 impl<'a> ScanContext<'a> {
     pub fn new(servers: &'a [ServerManifest]) -> Self {
-        Self { servers }
+        Self {
+            servers,
+            probes: &[],
+        }
+    }
+
+    pub fn with_probes(mut self, probes: &'a [ServerProbe]) -> Self {
+        self.probes = probes;
+        self
     }
 
     pub fn servers(&self) -> &'a [ServerManifest] {
         self.servers
+    }
+
+    /// The probe for a server, if one was taken.
+    pub fn probe(&self, server: &ServerManifest) -> Option<&'a ServerProbe> {
+        let url = match server.transport.as_ref()? {
+            crate::manifest::Transport::Http { url } => url,
+            _ => return None,
+        };
+        self.probes.iter().find(|p| &p.endpoint == url)
     }
 
     /// Every tool of every server, paired with the server it belongs to.

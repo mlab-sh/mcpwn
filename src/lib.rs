@@ -28,11 +28,13 @@ pub mod lock;
 pub mod manifest;
 pub mod output;
 pub mod policy;
+pub mod recon;
 pub mod report;
 
 pub use analysis::capabilities::{Capability, CapabilityCheck};
 pub use analysis::check::{GlobalCheck, ScanContext, ServerCheck, ToolCheck, ToolContext};
 pub use analysis::config::{PinningCheck, SecretsCheck, TransportCheck};
+pub use analysis::network::NetworkCheck;
 pub use analysis::normalize::{normalize, Normalized, NoteKind};
 pub use analysis::obfuscation::ObfuscationCheck;
 pub use analysis::registry::Registry;
@@ -48,6 +50,7 @@ pub use loading::{LoadStatus, LoadedConfig};
 pub use lock::{Lock, LockedServer, LockedTool, ServerId, ToolChange};
 pub use manifest::{ServerManifest, ToolManifest, ToolRef, Transport};
 pub use policy::Policy;
+pub use recon::{Prober, ServerProbe};
 pub use report::{Report, ScanMeta};
 
 /// Version of the scanner, stamped into every report.

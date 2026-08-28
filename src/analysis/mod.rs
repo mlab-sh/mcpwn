@@ -8,6 +8,7 @@ pub mod capabilities;
 pub mod check;
 pub mod config;
 pub mod flow;
+pub mod network;
 pub mod normalize;
 pub mod obfuscation;
 pub mod registry;
