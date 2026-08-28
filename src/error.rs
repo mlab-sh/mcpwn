@@ -32,6 +32,10 @@ pub enum Error {
     #[error("lockfile `{path}`: {message}")]
     Lock { path: String, message: String },
 
+    /// The policy file could not be used.
+    #[error("policy `{path}`: {message}")]
+    Policy { path: String, message: String },
+
     /// A rule set failed to compile.
     #[error("invalid rule set: {0}")]
     Rules(String),
@@ -56,6 +60,13 @@ impl Error {
     pub fn header(name: Option<String>, message: impl Into<String>) -> Self {
         Self::Header {
             name,
+            message: message.into(),
+        }
+    }
+
+    pub fn policy(path: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Policy {
+            path: path.into(),
             message: message.into(),
         }
     }

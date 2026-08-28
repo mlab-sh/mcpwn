@@ -1,8 +1,8 @@
 //! The rule catalogue behind `mcpwn explain <ID>`.
 //!
 //! A finding in a terminal has room for one sentence. This is where the rest
-//! goes: what the rule looks for, why it matters, what it looks like, and —
-//! just as important — when it is expected to fire on something harmless.
+//! goes: what the rule looks for, why it matters, what it looks like, and,
+//! just as important: when it is expected to fire on something harmless.
 //!
 //! The catalogue is data, not prose scattered through the checks, so a rule id
 //! has exactly one description. A test asserts that the severities here still
@@ -29,7 +29,7 @@ pub struct RuleDoc {
     /// A concrete instance, when one helps.
     pub example: Option<&'static str>,
     pub remediation: &'static str,
-    /// When this rule fires on something legitimate — stated plainly, because
+    /// When this rule fires on something legitimate: stated plainly, because
     /// a rule whose false positives are undocumented gets ignored wholesale.
     pub expected_noise: &'static str,
 }
@@ -68,8 +68,8 @@ alone at Critical alongside code evaluation. A parameter constrained by an \
         example: Some("\"command\": { \"type\": \"string\", \"description\": \"The shell command to run.\" }"),
         remediation: "\
 Confirm the tool is meant to have this capability, and that the agent is not \
-free to call it unattended. If it is, the surrounding controls — confirmation \
-prompts, allowlists — are what stands between an injected instruction and your \
+free to call it unattended. If it is, the surrounding controls; confirmation \
+prompts, allowlists: are what stands between an injected instruction and your \
 shell.",
         expected_noise: "\
 A tool named `run_command` will be reported, and that is correct: it can execute \
@@ -88,8 +88,8 @@ A parameter carrying source, an expression or a query that the server executes: 
 Python, JavaScript, SQL. Distinct from command execution only in what does the \
 executing; the consequence is the same.
 
-`query` and `statement` are deliberately *not* matched on their own — they are \
-the most common parameter names in search tools — and count only when the \
+`query` and `statement` are deliberately *not* matched on their own; they are \
+the most common parameter names in search tools, and count only when the \
 description says SQL, GraphQL or similar.",
         example: Some("\"query\": { \"type\": \"string\", \"description\": \"The SQL to execute against the database.\" }"),
         remediation: "\
@@ -113,12 +113,12 @@ passed straight to `open()` is arbitrary file read or write, and path traversal 
 is the usual way the first becomes the second.
 
 One level below execution because it is an *ingredient* of exfiltration rather \
-than exfiltration itself — and because tools entitled to it are everywhere.",
+than exfiltration itself, and because tools entitled to it are everywhere.",
         example: Some("\"path\": { \"type\": \"string\", \"description\": \"Absolute path to read.\" }"),
         remediation: "Check that the server confines this path to an intended root.",
         expected_noise: "\
 Every filesystem server is reported. The finding becomes interesting when it \
-appears next to an ingest and a sink — see MCPWN-FLOW-001.",
+appears next to an ingest and a sink: see MCPWN-FLOW-001.",
     },
     RuleDoc {
         id: "MCPWN-CAP-004",
@@ -133,12 +133,12 @@ reach destinations it should not (SSRF, including cloud metadata endpoints), and
 data can leave through it.
 
 Which of the two applies decides the tool's role in a toxic flow, and that \
-direction is not always knowable from the schema — see MCPWN-FLOW-001.",
+direction is not always knowable from the schema; see MCPWN-FLOW-001.",
         example: Some("\"url\": { \"type\": \"string\", \"description\": \"URL of the page to fetch.\" }"),
         remediation: "Check that the server restricts the destinations this parameter can reach.",
         expected_noise: "\
 Every fetch tool is reported. Verified against six live public documentation \
-servers, where this is the only capability that fires — correctly.",
+servers, where this is the only capability that fires; correctly.",
     },
     RuleDoc {
         id: "MCPWN-CAP-005",
@@ -153,7 +153,7 @@ The current MCP specification lets a server annotate a property with \
 the HTTP header `Mcp-Param-{name}`.
 
 That value therefore reaches load balancers, gateways and logs that never see \
-the tool arguments — infrastructure that may route, authorise or record on it. \
+the tool arguments: infrastructure that may route, authorise or record on it. \
 The annotation is the capability; no name matching is involved.",
         example: Some("\"region\": { \"type\": \"string\", \"x-mcp-header\": \"Region\" }"),
         remediation: "Check what the receiving infrastructure does with this header.",
@@ -170,14 +170,14 @@ routing. Worth a look precisely because it is uncommon.",
         check: "obfuscation",
         summary: "Text hidden in the U+E0000 block: read by the model, invisible to a human.",
         detail: "\
-Unicode tag characters U+E0020–U+E007E mirror printable ASCII one for one and \
+Unicode tag characters U+E0020-U+E007E mirror printable ASCII one for one and \
 render as nothing. An entire paragraph of instructions can be appended to a \
 tool description and be perfectly invisible in every reviewer's editor while the \
 model reads it in full.
 
 There is no legitimate use in prose; the block's only sanctioned role is \
 language tags in emoji sequences. Text hidden there was put there to be read by \
-a model and not by a person, which is the whole attack with no benign reading — \
+a model and not by a person, which is the whole attack with no benign reading; \
 hence Critical, alone at the top of this family.
 
 mcpwn decodes the payload and quotes it in the finding.",
@@ -201,7 +201,7 @@ render as nothing, so the text a reviewer sees and the text the model receives \
 are not the same string.
 
 Beyond hiding content, one such character dropped inside a keyword defeats any \
-matcher run on raw text — which is why every semantic check in mcpwn runs on the \
+matcher run on raw text: which is why every semantic check in mcpwn runs on the \
 normalised form instead.",
         example: Some("\"Please igno\\u{200B}re the previous instructions.\" renders as ordinary prose."),
         remediation: "Inspect the raw bytes of the field; compare what renders with what is stored.",
@@ -218,9 +218,9 @@ business being there.",
         check: "obfuscation",
         summary: "Bidi control characters reorder how the text is displayed.",
         detail: "\
-U+202A–202E and U+2066–2069 change the direction in which text renders. The \
+U+202A-202E and U+2066-2069 change the direction in which text renders. The \
 Trojan Source family of attacks uses them to make displayed text differ from \
-stored text — a description can read as harmless while containing something \
+stored text: a description can read as harmless while containing something \
 else entirely.",
         example: Some("A description rendering as \"…to evil.com\" while storing the reversed source."),
         remediation: "Inspect the raw bytes of the field; compare what renders with what is stored.",
@@ -238,12 +238,12 @@ Rare in a tool description written in English.",
         detail: "\
 A Cyrillic `а` inside an otherwise Latin word is indistinguishable to the eye \
 and completely distinct to a matcher. It is how a tool name is made to \
-impersonate another one — the mechanism behind shadowing.
+impersonate another one: the mechanism behind shadowing.
 
 The signal is the mix **inside one word**, never the presence of non-Latin text: \
 a description written entirely in Russian is ordinary. The finding names only \
 the intruders, the letters in the minority script.",
-        example: Some("`updаte_config` — mostly Latin, with one Cyrillic а (U+0430)."),
+        example: Some("`updаte_config`: mostly Latin, with one Cyrillic а (U+0430)."),
         remediation: "Check whether this name is impersonating another tool or server.",
         expected_noise: "\
 The one rule in this family with a real false-positive story, hence Medium. A \
@@ -265,6 +265,132 @@ carriage return are ordinary formatting and are not reported.",
         remediation: "Inspect the raw bytes of the field.",
         expected_noise: "Occasionally a formatting accident rather than an attack.",
     },
+    RuleDoc {
+        id: "MCPWN-OBF-006",
+        title: "Encoded text hidden in a description",
+        category: Category::Obfuscation,
+        severity: Severity::Medium,
+        check: "obfuscation",
+        summary: "A run of base64 or hex that decodes to readable text.",
+        detail: "\
+A description containing a long base64 or hex blob that decodes to prose. A \
+reviewer skims past it as an id or a checksum; plenty of models will decode it \
+and read what it says.
+
+This is hiding in plain sight rather than hiding in invisible codepoints; the \
+obvious next move once tag characters are caught; which is why it sits below \
+the zero-width family: something *is* visible, it just does not say what it \
+means.
+
+The bar is deliberately high: a long enough run, a valid decoding, and a result \
+that reads as words rather than bytes. Hashes, ids and embedded image data fail \
+that last test, which is what keeps this off every checksum in a description.",
+        example: Some("\"See docs. SWdub3JlIGFsbCBwcmV2aW91cyBpbnN0cnVjdGlvbnM=\" decodes to \"Ignore all previous instructions\"."),
+        remediation: "Read the decoded text in the finding and decide whether it belongs in a tool description.",
+        expected_noise: "\
+A long base64 field that genuinely holds text: an embedded example, a sample \
+payload: will fire. Medium and Confidence::Medium for that reason.",
+    },
+    // --- configuration ------------------------------------------------------
+    RuleDoc {
+        id: "MCPWN-CFG-001",
+        title: "Credential in plain text",
+        category: Category::Capability,
+        severity: Severity::Critical,
+        check: "config-secrets",
+        summary: "An MCP client config sets an environment variable to a literal credential.",
+        detail: "\
+A server's `env` block in the client configuration contains what looks like a \
+live credential: either a value carrying a known issuer prefix (`ghp_`, `sk-`, \
+`AKIA`, `xoxb-`, …), or a long high-entropy value under a name that says \
+credential.
+
+Anything able to read that file has the credential; backups, sync clients, \
+other local processes, and everyone the file is ever shared with. Config files \
+are also committed by accident far more often than they are encrypted.
+
+Values that are obviously placeholders (`changeme`, `${VAR}`, `your-key-here`) \
+are skipped, and no finding ever prints more than the first four characters of \
+a value.",
+        example: Some("\"env\": { \"GITHUB_TOKEN\": \"ghp_xxxxxxxxxxxxxxxxxxxx\" }"),
+        remediation: "\
+Move the value out of the config: read it from the process environment at \
+launch, or from a secret manager. If it has been committed anywhere, rotate it; \
+deleting it from the file does not un-leak it.",
+        expected_noise: "\
+A deliberately fake token used in a test fixture will fire if it has a real \
+prefix. Placeholder-shaped values are already excluded.",
+    },
+    RuleDoc {
+        id: "MCPWN-CFG-002",
+        title: "Unpinned launch package",
+        category: Category::RugPull,
+        severity: Severity::Medium,
+        check: "config-pinning",
+        summary: "A stdio server is launched from a remote package with no pinned version.",
+        detail: "\
+The server is started through a package runner; `npx`, `uvx`, `pnpm dlx`, \
+`bunx`: that downloads and executes the package fresh at every launch, with no \
+exact version. Whoever controls that package, or takes over the account that \
+publishes it, controls what runs on the machine at the next launch, with nothing \
+visible changing in the configuration.
+
+This is the rug pull that needs no malicious server at all, and `mcp.lock` \
+cannot catch it: the code can change completely while the tool list stays \
+byte-identical.
+
+Reported at High rather than Medium when `-y` is also present, since that \
+suppresses the install prompt and makes a first-time fetch silent.
+
+Entirely static: the command line is read, never run.",
+        example: Some("\"command\": \"npx\", \"args\": [\"-y\", \"@vendor/mcp-server\"]"),
+        remediation: "\
+Pin an exact version (`@vendor/mcp-server@1.4.2`), or install the server once \
+and launch the installed binary directly.",
+        expected_noise: "\
+Extremely common: it is what most published setup snippets tell people to \
+paste. Common is not the same as safe, which is the point of the finding.",
+    },
+    RuleDoc {
+        id: "MCPWN-CFG-003",
+        title: "Remote server reached over plaintext HTTP",
+        category: Category::Capability,
+        severity: Severity::High,
+        check: "config-transport",
+        summary: "A non-loopback endpoint is configured as http:// rather than https://.",
+        detail: "\
+Every tool argument, every result, and any credential sent with the request \
+crosses the network readable and modifiable by anything on the path.
+
+The interesting half is not eavesdropping but tampering: a modified `tools/list` \
+response is a tool-poisoning attack that needs no compromised server at all, \
+just a position on the network.
+
+Loopback addresses are not reported: a server on 127.0.0.1 has no network to \
+cross.",
+        example: Some("\"url\": \"http://mcp.internal.example/mcp\""),
+        remediation: "Use https://, or reach the server through a tunnel that provides transport security.",
+        expected_noise: "\
+Internal endpoints on a trusted network fire this. Whether that trust is \
+warranted is the question the finding is asking.",
+    },
+    RuleDoc {
+        id: "MCPWN-CFG-004",
+        title: "Credentials embedded in the endpoint URL",
+        category: Category::Capability,
+        severity: Severity::High,
+        check: "config-transport",
+        summary: "The endpoint URL carries userinfo before the host.",
+        detail: "\
+A credential written into a URL is copied into places nobody thinks to rotate: \
+proxy and gateway logs, shell and browser history, crash reports, referrer \
+headers.
+
+The finding redacts the userinfo before printing the URL.",
+        example: Some("\"url\": \"https://user:s3cret@mcp.example.com/mcp\""),
+        remediation: "Send the credential in an Authorization header instead of the URL.",
+        expected_noise: "None expected; this is unusual in a well-formed configuration.",
+    },
     // --- rug pull -----------------------------------------------------------
     RuleDoc {
         id: "MCPWN-RUG-001",
@@ -278,7 +404,7 @@ The tool the agent will now be shown is not the one that was reviewed. A server 
 that behaves for a while and then changes its descriptions is the rug pull: \
 approval was granted to something that no longer exists.
 
-The digest covers name, description and inputSchema — what the model reads and \
+The digest covers name, description and inputSchema; what the model reads and \
 what decides whether it calls the tool. It is taken over the raw text with no \
 Unicode normalisation, deliberately, so that smuggling an invisible character \
 into a description registers as the change it is.
@@ -288,10 +414,10 @@ The finding names which field moved: description, inputSchema, or both.",
         remediation: "\
 Diff the current description and schema against what you approved. If the change \
 is legitimate, re-lock with `--update-lock`. Note that a plain scan never \
-rewrites the lock — that separation is the check.",
+rewrites the lock: that separation is the check.",
         expected_noise: "\
 Legitimate updates fire this. That is the intended workflow: you see the change, \
-you decide, you re-lock. Cosmetic reformatting does not fire it — the JSON is \
+you decide, you re-lock. Cosmetic reformatting does not fire it; the JSON is \
 canonicalised before hashing.",
     },
     RuleDoc {
@@ -346,8 +472,8 @@ No tool here is dangerous alone. The risk is the combination:
        v
     sink     it leaves
 
-An instruction hidden in what the ingest tool retrieves — a web page, an issue \
-body, an incoming mail — can steer the agent into calling the other two. Each \
+An instruction hidden in what the ingest tool retrieves; a web page, an issue \
+body, an incoming mail: can steer the agent into calling the other two. Each \
 server can be entirely legitimate; the environment assembled from them is not, \
 and the chain routinely crosses servers, which is why no per-tool view can see \
 it.
@@ -367,7 +493,7 @@ entered the context. Removing the ingest is often easiest and costs least.",
         expected_noise: "\
 Role tagging is heuristic: it catches the clear cases and will miss tools whose \
 name and description do not say what they do. It is also conservative on \
-direction — an ambiguous network tool counts as both ingest and sink, on the \
+direction: an ambiguous network tool counts as both ingest and sink, on the \
 principle that a missed flow is worse than one to check. Source and sink with no \
 ingest is deliberately *not* reported: without untrusted content entering, \
 nothing steers the agent into the chain.",

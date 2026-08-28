@@ -2,7 +2,7 @@
 //!
 //! This is where `yara-x` will be plugged in: a rule set is compiled once, then
 //! matched against each tool's normalised description and schema descriptions,
-//! and every match becomes a [`Finding`]. No YARA dependency yet — only the
+//! and every match becomes a [`Finding`]. No YARA dependency yet; only the
 //! seam it will slot into.
 //!
 //! Not implemented yet.

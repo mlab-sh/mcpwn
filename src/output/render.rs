@@ -1,7 +1,7 @@
 //! Terminal rendering: findings grouped by severity, ANSI colours optional.
 //!
 //! Writes to any [`Write`], so it is testable and the engine stays I/O-free.
-//! The layout is deliberately minimal for now — it will grow per-category
+//! The layout is deliberately minimal for now: it will grow per-category
 //! detail blocks as the detection modules land.
 
 use std::io::{self, Write};
@@ -69,7 +69,7 @@ impl TerminalRenderer {
         let target = report.meta.target.as_deref().unwrap_or("(no target)");
         writeln!(
             out,
-            "{} {} — {}",
+            "{} {}; {}",
             self.paint(crate::NAME, Style::new().bold().cyan()),
             crate::VERSION,
             target
@@ -82,8 +82,12 @@ impl TerminalRenderer {
     }
 
     fn finding<W: Write>(&self, finding: &Finding, out: &mut W) -> io::Result<()> {
+        // A config finding has no tool: it is attached to the server instead.
         let subjects = if finding.subjects.is_empty() {
-            String::new()
+            match &finding.server {
+                Some(server) => format!("  [{server}]"),
+                None => String::new(),
+            }
         } else {
             let names: Vec<String> = finding.subjects.iter().map(ToString::to_string).collect();
             format!("  [{}]", names.join(", "))

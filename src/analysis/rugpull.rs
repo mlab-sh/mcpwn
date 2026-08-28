@@ -94,7 +94,7 @@ fn finding(server_name: &str, id: &ServerId, change: &ToolChange) -> Finding {
             .message(format!(
                 "`{name}` on `{id}` no longer matches the lockfile: {what} changed. The tool the \
                  agent will now be shown is not the one that was reviewed. Nothing here says the \
-                 change is hostile — it says it happened without being approved."
+                 change is hostile: it says it happened without being approved."
             ))
             .confidence(Confidence::High)
             .subject(subject)

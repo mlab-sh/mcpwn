@@ -15,7 +15,7 @@
 //! | Codex | `[mcp_servers.*]` | TOML table |
 //!
 //! Assuming `mcpServers` everywhere silently returns zero servers for VS Code
-//! and Zed — a scanner that reports "nothing to see here" on a config it simply
+//! and Zed: a scanner that reports "nothing to see here" on a config it simply
 //! failed to read is worse than one that errors.
 //!
 //! # v1 limits
@@ -154,7 +154,7 @@ pub fn parse_json(raw: &str, client: Client, origin: &Path) -> crate::Result<Vec
     let origin = origin.display().to_string();
 
     let Some(node) = find_servers_node(&doc, client) else {
-        // A config with no server block is valid — a user may have emptied it.
+        // A config with no server block is valid: a user may have emptied it.
         return Ok(Vec::new());
     };
 

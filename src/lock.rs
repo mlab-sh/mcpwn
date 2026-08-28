@@ -1,4 +1,4 @@
-//! `mcp.lock` — the memory that makes rug-pull detection possible.
+//! `mcp.lock`: the memory that makes rug-pull detection possible.
 //!
 //! Every other check answers "is this tool dangerous?" from one scan. Rug pull
 //! asks "did this tool *change* since I approved it?", which needs a record of
@@ -7,8 +7,8 @@
 //! # Format
 //!
 //! JSON. The crate already depends on `serde_json` (so this costs nothing), it
-//! is the format of every other mcpwn output, and — with servers sorted by id,
-//! tools sorted by name and one field per line — it diffs cleanly in a code
+//! is the format of every other mcpwn output, and; with servers sorted by id,
+//! tools sorted by name and one field per line: it diffs cleanly in a code
 //! review, which is the point of committing it.
 //!
 //! # Hashing raw content, on purpose
@@ -54,16 +54,16 @@ pub const DEFAULT_LOCK_FILE: &str = "mcp.lock";
 /// and either a renamed server looks like a new one (baseline lost), or two
 /// different servers collide (mutations missed).
 ///
-/// * **HTTP** — the endpoint URL, normalised: lowercase scheme and host,
+/// * **HTTP**: the endpoint URL, normalised: lowercase scheme and host,
 ///   default port dropped, trailing slash removed. The URL is what the client
 ///   actually talks to, and it survives the config being renamed or moved
 ///   between machines. Query strings are **kept**: they routinely carry a
 ///   tenant or an API version, so two URLs differing only there are two
 ///   different servers.
-/// * **stdio** — the launch command and its arguments. The config key is a
+/// * **stdio**: the launch command and its arguments. The config key is a
 ///   user-chosen label that can be renamed at will; what identifies the server
 ///   is what gets executed.
-/// * **neither** — falls back to the config-declared name, which is all there
+/// * **neither**: falls back to the config-declared name, which is all there
 ///   is.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -183,7 +183,7 @@ fn sha256(bytes: &[u8]) -> String {
 /// The exact content covered by a tool's digest.
 ///
 /// **name + description + inputSchema.** These three are what the model reads
-/// and what decides whether it calls the tool and with what — a change to any
+/// and what decides whether it calls the tool and with what; a change to any
 /// of them can change the agent's behaviour without the user seeing anything.
 /// Everything else a server sends (`annotations`, `title`, vendor extensions)
 /// is deliberately outside the digest for now: it is not yet acted upon, and
@@ -367,6 +367,47 @@ impl Lock {
         }
     }
 
+    /// Compare two recorded snapshots of the same server.
+    ///
+    /// Shared with [`Lock::compare`] so `mcpwn diff` and a scan can never
+    /// disagree about what counts as a change.
+    pub fn compare_locked(before: &LockedServer, after: &LockedServer) -> Vec<ToolChange> {
+        let mut changes = Vec::new();
+
+        for tool in &after.tools {
+            match before.tool(&tool.name) {
+                Some(previous) if previous.digest.hash != tool.digest.hash => {
+                    let mut fields = Vec::new();
+                    if previous.digest.description != tool.digest.description {
+                        fields.push("description");
+                    }
+                    if previous.digest.input_schema != tool.digest.input_schema {
+                        fields.push("inputSchema");
+                    }
+                    changes.push(ToolChange::Mutated {
+                        name: tool.name.clone(),
+                        fields,
+                        was: previous.digest.hash.clone(),
+                        now: tool.digest.hash.clone(),
+                    });
+                }
+                Some(_) => {}
+                None => changes.push(ToolChange::Added {
+                    name: tool.name.clone(),
+                }),
+            }
+        }
+        for previous in &before.tools {
+            if !after.tools.iter().any(|t| t.name == previous.name) {
+                changes.push(ToolChange::Removed {
+                    name: previous.name.clone(),
+                });
+            }
+        }
+        changes.sort_by(|a, b| a.name().cmp(b.name()));
+        changes
+    }
+
     /// Compare what was observed against the lock.
     ///
     /// Servers absent from the lock produce nothing: there is no baseline to
@@ -429,7 +470,7 @@ pub enum ToolChange {
     },
     /// In the lock, no longer advertised.
     Removed { name: String },
-    /// Advertised, never locked — so never reviewed.
+    /// Advertised, never locked, so never reviewed.
     Added { name: String },
 }
 

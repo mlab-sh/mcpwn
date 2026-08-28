@@ -1,0 +1,27 @@
+# Example of using the action on your own repository.
+name: MCP security scan
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Remote servers can change without your repository changing, so a scan
+    # only on push would never see a rug pull.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  mcpwn:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          path: .
+          policy: mcpwn.toml
+          lock: mcp.lock
+          fail-on: high

@@ -1,11 +1,11 @@
 [package]
 name = "mcpwn"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Static, offline security scanner for MCP (Model Context Protocol) servers."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/Sn0wAlice/mcpwn"
+repository = "https://github.com/mlab-sh/mcpwn"
 authors = ["Sn0wAlice"]
 readme = "README.md"
 keywords = ["mcp", "security", "scanner", "static-analysis"]
@@ -33,6 +33,7 @@ unicode-security = "0.1.2"
 unicode-script = "0.5.8"
 unicode-normalization = "0.1.25"
 sha2 = "0.11.0"
+toml = "1.1.4"
 
 [profile.release]
 lto = "thin"

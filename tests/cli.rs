@@ -268,7 +268,7 @@ fn the_lockfile_lifecycle_detects_a_mutation_and_clears_it_on_update() {
         mcpwn(&args)
     };
 
-    // 1. First run: no baseline, so nothing to compare — and no lock written
+    // 1. First run: no baseline, so nothing to compare, and no lock written
     //    unless asked.
     let first = scan(&[]);
     assert!(!lock.exists(), "a plain scan must never create the lock");
@@ -415,7 +415,21 @@ fn scanning_a_project_path_still_works() {
     let output = mcpwn(&["scan", &tmp.path().display().to_string(), "--no-color"]);
     let out = stdout(&output);
 
-    assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(out.contains("1 server(s)"), "got:\n{out}");
     assert!(out.contains("stdio server"), "got:\n{out}");
+    // The config checks look at stdio servers even though their tools are never
+    // enumerated: `npx -y x` is an unpinned launch package.
+    assert!(out.contains("MCPWN-CFG-002"), "got:\n{out}");
+    assert_eq!(output.status.code(), Some(1), "findings mean exit 1");
+
+    // ...and raising the threshold above it makes the same scan pass. `-y` puts
+    // this finding at High, so the threshold has to clear that.
+    let lenient = mcpwn(&[
+        "scan",
+        &tmp.path().display().to_string(),
+        "--no-color",
+        "--fail-on",
+        "critical",
+    ]);
+    assert!(lenient.status.success(), "stderr: {}", stderr(&lenient));
 }

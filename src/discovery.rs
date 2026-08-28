@@ -1,12 +1,12 @@
 //! Step 1 of two: **find** MCP configuration files on disk.
 //!
-//! This module only locates and classifies files — it never opens them. Turning
+//! This module only locates and classifies files: it never opens them. Turning
 //! a [`DiscoveredConfig`] into servers is [`crate::loading`]'s job.
 //!
 //! Two modes:
 //!
-//! * [`discover_global`] — the well-known per-user locations, per OS.
-//! * [`discover_project`] — the project-level dotfolders under a repo root.
+//! * [`discover_global`]: the well-known per-user locations, per OS.
+//! * [`discover_project`]: the project-level dotfolders under a repo root.
 //!
 //! A missing file is the normal case, not an error: candidates that do not
 //! exist are simply dropped.
@@ -97,7 +97,7 @@ impl ConfigFormat {
 
     /// Whether [`crate::loading`] can parse this format yet.
     ///
-    /// Only JSON in v1 — see the module docs of [`crate::loading`].
+    /// Only JSON in v1: see the module docs of [`crate::loading`].
     pub fn is_supported(self) -> bool {
         matches!(self, ConfigFormat::Json)
     }
@@ -208,7 +208,7 @@ pub fn global_candidates(layout: &HomeLayout) -> Vec<DiscoveredConfig> {
         out.push(DiscoveredConfig::new(path, client, Scope::Global, format));
     };
 
-    // Claude Desktop — one location per OS.
+    // Claude Desktop: one location per OS.
     if let Some(app_support) = &layout.app_support {
         push(
             app_support
@@ -274,7 +274,7 @@ pub fn global_candidates(layout: &HomeLayout) -> Vec<DiscoveredConfig> {
     // location observed on current builds, and the directory itself follows the
     // usual per-OS settings path.
     //
-    // TODO(vscode): unverified cases deliberately NOT guessed —
+    // TODO(vscode): unverified cases deliberately NOT guessed,
     //   * MCP servers declared inline in `settings.json` under `"mcp": {"servers": ...}`
     //     (the loader already accepts that shape, discovery just does not probe it);
     //   * Insiders / OSS / portable-mode installs (`Code - Insiders`, `VSCodium`,

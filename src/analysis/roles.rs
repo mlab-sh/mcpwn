@@ -1,11 +1,11 @@
 //! Tagging each tool with the roles it can play in an exfiltration chain.
 //!
-//! * **Source** — reads private state: local files, secrets, environment,
+//! * **Source**: reads private state: local files, secrets, environment,
 //!   mailbox, database, clipboard.
-//! * **Ingest** — brings *untrusted, third-party* content into the context: a
+//! * **Ingest**: brings *untrusted, third-party* content into the context: a
 //!   fetched web page, an incoming mail, an issue body. This is the injection
 //!   point, the thing that can steer the model.
-//! * **Sink** — sends data outward: an arbitrary request, a mail, a webhook, a
+//! * **Sink**: sends data outward: an arbitrary request, a mail, a webhook, a
 //!   published comment.
 //!
 //! A tool can carry several roles. A shell tool carries source *and* sink on
@@ -15,7 +15,7 @@
 //!
 //! It catches the clear cases and misses contrived ones. Every tag records
 //! whether it is [`RoleConfidence::Clear`] or [`RoleConfidence::Ambiguous`],
-//! and that distinction is carried all the way into the finding's severity —
+//! and that distinction is carried all the way into the finding's severity,
 //! a chain resting on a guess is not reported as a certainty.
 
 use serde::{Deserialize, Serialize};
@@ -119,7 +119,7 @@ impl RoleTags {
 // Roles are not decided by a flat keyword list, because the same verb means
 // opposite things depending on what it acts on: `read_file` reads private local
 // state (source), `read_wiki_contents` pulls in a third party's text (ingest).
-// So the tables are two-dimensional — a verb and an object — and the role falls
+// So the tables are two-dimensional (a verb and an object) and the role falls
 // out of the pair.
 //
 // Everything the tagger knows lives here. Editing these lists is how you tune
@@ -268,7 +268,7 @@ const INBOUND_METHODS: &[&str] = &["get", "head"];
 /// Infer the roles of one tool.
 ///
 /// `capabilities` is what [`crate::analysis::capabilities`] already concluded
-/// about this tool — consumed rather than recomputed.
+/// about this tool: consumed rather than recomputed.
 pub fn tag_tool(tool: &ToolContext<'_>, capabilities: &[Capability]) -> RoleTags {
     let mut tags = RoleTags::default();
 
@@ -394,7 +394,7 @@ pub fn tag_tool(tool: &ToolContext<'_>, capabilities: &[Capability]) -> RoleTags
 ///
 /// Resolution order: an explicit HTTP method in the schema, then the verb in
 /// the tool's name, then the description. **When none of them settles it the
-/// tool is tagged as both, Ambiguous** — a missed flow is a scanner that failed,
+/// tool is tagged as both, Ambiguous**; a missed flow is a scanner that failed,
 /// while an over-reported one is a chain someone has to look at for a minute.
 /// The ambiguity is not hidden: it downgrades the finding from Critical to High
 /// and is quoted in the message.

@@ -3,7 +3,7 @@
 //! There are deliberately **two levels**, because the detections we know are
 //! coming do not all look at the same thing:
 //!
-//! * [`ToolCheck`] sees one tool at a time. Most detections are of this shape —
+//! * [`ToolCheck`] sees one tool at a time. Most detections are of this shape,
 //!   capabilities, obfuscation, poisoned descriptions.
 //! * [`GlobalCheck`] sees every tool of every server at once. Toxic flows and
 //!   shadowing only exist *between* tools, often across servers that each look
@@ -70,11 +70,21 @@ pub trait ToolCheck: std::fmt::Debug + Send + Sync {
     fn check(&self, tool: &ToolContext<'_>, ctx: &ScanContext<'_>) -> Vec<Finding>;
 }
 
+/// A detection that examines one server: how it is launched, how it is reached,
+/// what its configuration holds. It never looks at tools.
+pub trait ServerCheck: std::fmt::Debug + Send + Sync {
+    fn id(&self) -> &'static str;
+
+    fn description(&self) -> &'static str;
+
+    fn check(&self, server: &ServerManifest, ctx: &ScanContext<'_>) -> Vec<Finding>;
+}
+
 /// A detection that needs to see every tool at once.
 ///
 /// Global checks run **after** every [`ToolCheck`], and receive what they
 /// produced as `prior`. That ordering is a guarantee, not an accident: a global
-/// check can build on per-tool conclusions instead of recomputing them — the
+/// check can build on per-tool conclusions instead of recomputing them; the
 /// toxic-flow check reads the capabilities already found rather than
 /// re-analysing every schema.
 pub trait GlobalCheck: std::fmt::Debug + Send + Sync {

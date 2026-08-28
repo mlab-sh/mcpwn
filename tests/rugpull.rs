@@ -3,7 +3,7 @@
 //! Two tests carry the weight. `cosmetic_reformatting_is_not_a_mutation` proves
 //! the canonical serialisation: without it, a server that merely reorders its
 //! JSON keys looks like it changed. `an_invisible_character_is_a_mutation`
-//! proves the opposite choice — the digest covers raw text, so smuggling a
+//! proves the opposite choice: the digest covers raw text, so smuggling a
 //! zero-width character in cannot slip past.
 
 mod common;
@@ -71,7 +71,7 @@ fn a_first_scan_records_the_baseline_and_finds_nothing() {
         tool("write_file", "Writes a file.", schema()),
     ])];
 
-    // Nothing to compare against on a first run — that is not an error.
+    // Nothing to compare against on a first run: that is not an error.
     assert!(check(&Lock::default(), &servers).is_empty());
 
     let lock = baseline(&servers);

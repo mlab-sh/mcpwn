@@ -43,7 +43,7 @@ impl InventoryRenderer {
         if loaded.is_empty() {
             return writeln!(
                 out,
-                "no MCP configuration files found (this is not an error — nothing to scan)"
+                "no MCP configuration files found (this is not an error; nothing to scan)"
             );
         }
 
@@ -67,7 +67,7 @@ impl InventoryRenderer {
                         .as_ref()
                         .map(|t| t.summary())
                         .unwrap_or_else(|| "(no launch method)".to_owned());
-                    writeln!(out, "    {} — {}", server.name, transport)?;
+                    writeln!(out, "    {}; {}", server.name, transport)?;
                 }
             }
         }
@@ -121,7 +121,7 @@ impl InventoryRenderer {
                         .chars()
                         .take(72)
                         .collect();
-                    writeln!(out, "      {} — {}", tool.name, summary)?;
+                    writeln!(out, "      {}; {}", tool.name, summary)?;
                 }
             }
         }
@@ -139,7 +139,7 @@ impl InventoryRenderer {
         let scope = format!("{:<scope_width$}", entry.config.scope.label());
         let count = match &entry.status {
             LoadStatus::Parsed => format!("{} server(s)", entry.servers.len()),
-            _ => "—".to_owned(),
+            _ => "; ".to_owned(),
         };
         let marker = match &entry.status {
             LoadStatus::Parsed => String::new(),

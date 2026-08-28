@@ -2,7 +2,7 @@
 //!
 //! The two anti-false-positive tests are the ones to watch. Without an ingest
 //! there is no injection point and therefore no flow, however much private data
-//! and network access sit side by side — and a pile of benign tools must stay
+//! and network access sit side by side, and a pile of benign tools must stay
 //! silent.
 
 use serde_json::json;

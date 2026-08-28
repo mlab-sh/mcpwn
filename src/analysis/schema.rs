@@ -35,7 +35,7 @@ pub struct Param {
     pub item_ty: Option<String>,
     /// Whether the parent object lists it in `required`.
     pub required: bool,
-    /// Per-parameter description — model-visible, therefore attacker-usable.
+    /// Per-parameter description: model-visible, therefore attacker-usable.
     pub description: Option<String>,
     /// Values from an `enum` constraint. A constrained parameter cannot carry
     /// arbitrary input, which lowers the severity of whatever it enables.

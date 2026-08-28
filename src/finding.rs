@@ -116,7 +116,7 @@ impl Severity {
         }
     }
 
-    /// Descending order — the order findings are presented in.
+    /// Descending order: the order findings are presented in.
     pub const ALL: [Severity; 5] = [
         Severity::Critical,
         Severity::High,
@@ -213,9 +213,14 @@ pub struct Finding {
     /// The full explanation shown to the user.
     pub message: String,
     /// Every tool this finding is about. Single-tool findings have exactly one;
-    /// shadowing and toxic-flow findings have several.
+    /// toxic-flow findings have several.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subjects: Vec<ToolRef>,
+    /// The server a finding is about when it concerns no particular tool; a
+    /// secret in its config, an unpinned launch command. Tool findings leave it
+    /// empty: their subject already names the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
     /// For [`Category::ToxicFlow`]: the ordered source -> ingest -> sink chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow: Option<FlowChain>,
@@ -243,6 +248,7 @@ impl Finding {
                 title: title.into(),
                 message: String::new(),
                 subjects: Vec::new(),
+                server: None,
                 flow: None,
                 evidence: Vec::new(),
                 remediation: None,
@@ -253,6 +259,16 @@ impl Finding {
     /// The tool this finding is primarily about, if any.
     pub fn primary_subject(&self) -> Option<&ToolRef> {
         self.subjects.first()
+    }
+
+    /// What the finding is attached to, for display: `server::tool`, or the
+    /// bare server name for a server-scoped finding.
+    pub fn scope(&self) -> Option<String> {
+        match (self.subjects.first(), &self.server) {
+            (Some(subject), _) => Some(subject.to_string()),
+            (None, Some(server)) => Some(server.clone()),
+            (None, None) => None,
+        }
     }
 }
 
@@ -275,6 +291,12 @@ impl FindingBuilder {
 
     pub fn subject(mut self, tool: ToolRef) -> Self {
         self.finding.subjects.push(tool);
+        self
+    }
+
+    /// Attach the finding to a server rather than to a tool.
+    pub fn server(mut self, server: impl Into<String>) -> Self {
+        self.finding.server = Some(server.into());
         self
     }
 

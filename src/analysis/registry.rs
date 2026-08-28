@@ -4,7 +4,8 @@
 //! the analyzer never names a check, and no renderer knows any check exists.
 
 use super::capabilities::CapabilityCheck;
-use super::check::{GlobalCheck, ToolCheck};
+use super::check::{GlobalCheck, ServerCheck, ToolCheck};
+use super::config::{PinningCheck, SecretsCheck, TransportCheck};
 use super::flow::ToxicFlowCheck;
 use super::obfuscation::ObfuscationCheck;
 
@@ -12,6 +13,7 @@ use super::obfuscation::ObfuscationCheck;
 #[derive(Debug, Default)]
 pub struct Registry {
     tool_checks: Vec<Box<dyn ToolCheck>>,
+    server_checks: Vec<Box<dyn ServerCheck>>,
     global_checks: Vec<Box<dyn GlobalCheck>>,
 }
 
@@ -28,7 +30,19 @@ impl Registry {
         Self::empty()
             .with_tool_check(CapabilityCheck::new())
             .with_tool_check(ObfuscationCheck::new())
+            .with_server_check(SecretsCheck::new())
+            .with_server_check(PinningCheck::new())
+            .with_server_check(TransportCheck::new())
             .with_global_check(ToxicFlowCheck::new())
+    }
+
+    pub fn with_server_check(mut self, check: impl ServerCheck + 'static) -> Self {
+        self.server_checks.push(Box::new(check));
+        self
+    }
+
+    pub fn server_checks(&self) -> impl Iterator<Item = &dyn ServerCheck> {
+        self.server_checks.iter().map(AsRef::as_ref)
     }
 
     pub fn with_tool_check(mut self, check: impl ToolCheck + 'static) -> Self {
@@ -50,7 +64,7 @@ impl Registry {
     }
 
     pub fn len(&self) -> usize {
-        self.tool_checks.len() + self.global_checks.len()
+        self.tool_checks.len() + self.server_checks.len() + self.global_checks.len()
     }
 
     pub fn is_empty(&self) -> bool {

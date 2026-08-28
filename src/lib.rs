@@ -1,4 +1,4 @@
-//! **mcpwn** — a static, offline security scanner for MCP (Model Context
+//! **mcpwn**: a static, offline security scanner for MCP (Model Context
 //! Protocol) servers.
 //!
 //! The engine never launches an MCP server, never connects to one and never
@@ -27,10 +27,12 @@ pub mod loading;
 pub mod lock;
 pub mod manifest;
 pub mod output;
+pub mod policy;
 pub mod report;
 
 pub use analysis::capabilities::{Capability, CapabilityCheck};
-pub use analysis::check::{GlobalCheck, ScanContext, ToolCheck, ToolContext};
+pub use analysis::check::{GlobalCheck, ScanContext, ServerCheck, ToolCheck, ToolContext};
+pub use analysis::config::{PinningCheck, SecretsCheck, TransportCheck};
 pub use analysis::normalize::{normalize, Normalized, NoteKind};
 pub use analysis::obfuscation::ObfuscationCheck;
 pub use analysis::registry::Registry;
@@ -44,6 +46,7 @@ pub use finding::{Category, Confidence, Evidence, Finding, FindingId, Severity, 
 pub use loading::{LoadStatus, LoadedConfig};
 pub use lock::{Lock, LockedServer, LockedTool, ServerId, ToolChange};
 pub use manifest::{ServerManifest, ToolManifest, ToolRef, Transport};
+pub use policy::Policy;
 pub use report::{Report, ScanMeta};
 
 /// Version of the scanner, stamped into every report.

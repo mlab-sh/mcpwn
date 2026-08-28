@@ -2,7 +2,7 @@
 //!
 //! Every model-visible string of a tool goes through [`super::normalize`], and
 //! whatever that reports becomes a finding here. The check itself holds no
-//! Unicode knowledge — it maps note kinds to severities and writes the message.
+//! Unicode knowledge: it maps note kinds to severities and writes the message.
 //!
 //! Unlike [`super::capabilities`], most of what this reports is **not**
 //! ordinary. A tool description has no reason to contain a zero-width space,
@@ -25,6 +25,7 @@ pub fn finding_id(kind: NoteKind) -> &'static str {
         NoteKind::BidiControl => "MCPWN-OBF-003",
         NoteKind::MixedScript => "MCPWN-OBF-004",
         NoteKind::ControlCharacter => "MCPWN-OBF-005",
+        NoteKind::EncodedPayload => "MCPWN-OBF-006",
     }
 }
 
@@ -40,7 +41,7 @@ pub fn finding_id(kind: NoteKind) -> &'static str {
 /// Indic and Arabic scripts, bidi in genuinely bidirectional text), so they
 /// stop short of Critical.
 ///
-/// Mixed script is Medium — legitimate multilingual text exists, and this is
+/// Mixed script is Medium: legitimate multilingual text exists, and this is
 /// the one kind here with a real false-positive story.
 pub fn severity(kind: NoteKind) -> Severity {
     match kind {
@@ -49,6 +50,9 @@ pub fn severity(kind: NoteKind) -> Severity {
         NoteKind::BidiControl => Severity::High,
         NoteKind::MixedScript => Severity::Medium,
         NoteKind::ControlCharacter => Severity::Medium,
+        // Encoding is not invisibility: a reviewer sees *something*, just not
+        // what it says. Below the zero-width family for that reason.
+        NoteKind::EncodedPayload => Severity::Medium,
     }
 }
 
@@ -59,6 +63,7 @@ fn title(kind: NoteKind) -> &'static str {
         NoteKind::BidiControl => "Bidirectional override",
         NoteKind::MixedScript => "Mixed-script word",
         NoteKind::ControlCharacter => "Unexpected control characters",
+        NoteKind::EncodedPayload => "Encoded text hidden in a description",
     }
 }
 
@@ -84,6 +89,10 @@ fn statement(kind: NoteKind) -> &'static str {
             "control characters have no meaning in a description and can truncate or corrupt it \
              when displayed"
         }
+        NoteKind::EncodedPayload => {
+            "this run of base64 or hex decodes to readable text, so the description carries a \
+             message a reviewer would skip over as noise and a model may well decode"
+        }
     }
 }
 
@@ -94,6 +103,9 @@ fn remediation(kind: NoteKind) -> &'static str {
         }
         NoteKind::InvisibleCharacter | NoteKind::BidiControl | NoteKind::ControlCharacter => {
             "Inspect the raw bytes of this field; compare what renders with what is stored."
+        }
+        NoteKind::EncodedPayload => {
+            "Read the decoded text below and decide whether it belongs in a tool description."
         }
         NoteKind::MixedScript => "Check whether this name is impersonating another tool or server.",
     }
@@ -199,8 +211,8 @@ fn finding(
     )
     .message(message)
     .confidence(match kind {
-        // The only kind with a real false-positive story.
-        NoteKind::MixedScript => Confidence::Medium,
+        // The two kinds with a real false-positive story.
+        NoteKind::MixedScript | NoteKind::EncodedPayload => Confidence::Medium,
         _ => Confidence::High,
     })
     .subject(subject.clone())

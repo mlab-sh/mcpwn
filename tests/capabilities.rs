@@ -302,7 +302,7 @@ fn a_non_text_parameter_cannot_carry_a_command() {
 #[test]
 fn a_bare_query_parameter_is_not_code_evaluation() {
     // The single most common parameter name in search tools. Flagging it would
-    // drown every real finding — verified against three live public servers.
+    // drown every real finding: verified against three live public servers.
     let findings = check(&tool(
         "search_docs",
         json!({
@@ -521,7 +521,7 @@ fn a_custom_registry_replaces_the_builtin_checks() {
         )
         .analyze(&servers);
 
-    // Two per-tool findings plus one global one — both levels ran.
+    // Two per-tool findings plus one global one: both levels ran.
     assert_eq!(report.findings.len(), 3);
     assert!(report.findings.iter().any(|f| f.title == "saw 2 tool(s)"));
 }

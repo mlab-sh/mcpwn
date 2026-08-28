@@ -11,10 +11,11 @@ use owo_colors::OwoColorize;
 use mcpwn::analysis::registry::Registry;
 use mcpwn::analysis::rugpull::RugPullCheck;
 use mcpwn::explain;
-use mcpwn::lock::{self, Lock, ServerId, DEFAULT_LOCK_FILE};
+use mcpwn::lock::{self, Lock, ServerId, ToolChange, DEFAULT_LOCK_FILE};
 use mcpwn::output::{
     explain::ExplainRenderer, inventory::InventoryRenderer, render::TerminalRenderer, sarif,
 };
+use mcpwn::policy::{Policy, DEFAULT_POLICY_FILE};
 use mcpwn::{
     discovery, enumerate, loading, Analyzer, AnalyzerConfig, DiscoveredConfig, EnumeratedServer,
     LoadedConfig, Report, StaticEnumerator,
@@ -45,6 +46,20 @@ pub enum Command {
     /// Explain a rule id, e.g. `mcpwn explain MCPWN-CAP-001`. Without one,
     /// lists every rule mcpwn can emit.
     Explain(ExplainArgs),
+    /// Compare two lockfiles, for reviewing a change to `mcp.lock`.
+    Diff(DiffArgs),
+    /// Print a starter `mcpwn.toml` policy file.
+    InitPolicy,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct DiffArgs {
+    /// The lockfile as it was.
+    #[arg(value_name = "BEFORE")]
+    pub before: PathBuf,
+    /// The lockfile as it is now.
+    #[arg(value_name = "AFTER")]
+    pub after: PathBuf,
 }
 
 #[derive(Debug, clap::Args)]
@@ -103,7 +118,7 @@ pub struct ScanArgs {
     pub lock: Option<PathBuf>,
 
     /// Write the lockfile to establish a baseline. Refuses to overwrite an
-    /// existing one — use --update-lock for that.
+    /// existing one: use --update-lock for that.
     #[arg(long, conflicts_with = "update_lock")]
     pub write_lock: bool,
 
@@ -113,9 +128,46 @@ pub struct ScanArgs {
     #[arg(long)]
     pub update_lock: bool,
 
+    /// Path to the policy file. Defaults to `mcpwn.toml` in the working
+    /// directory, and is simply absent if there is none.
+    #[arg(long, value_name = "PATH")]
+    pub policy: Option<PathBuf>,
+
+    /// Ignore any policy file that would otherwise be picked up.
+    #[arg(long, conflicts_with = "policy")]
+    pub no_policy: bool,
+
+    /// Lowest severity that makes the scan exit non-zero. Overrides the policy
+    /// file. Findings below it are still reported.
+    #[arg(long, value_name = "SEVERITY")]
+    pub fail_on: Option<SeverityArg>,
+
     /// Output format.
     #[arg(short, long, value_enum, default_value_t = Format::Terminal)]
     pub format: Format,
+}
+
+/// Severity as a command-line value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lowercase")]
+pub enum SeverityArg {
+    Critical,
+    High,
+    Medium,
+    Low,
+    Info,
+}
+
+impl From<SeverityArg> for mcpwn::Severity {
+    fn from(arg: SeverityArg) -> Self {
+        match arg {
+            SeverityArg::Critical => mcpwn::Severity::Critical,
+            SeverityArg::High => mcpwn::Severity::High,
+            SeverityArg::Medium => mcpwn::Severity::Medium,
+            SeverityArg::Low => mcpwn::Severity::Low,
+            SeverityArg::Info => mcpwn::Severity::Info,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -155,6 +207,11 @@ impl Cli {
             Command::Discover(args) => self.discover(args),
             Command::Scan(args) => self.scan(args),
             Command::Explain(args) => self.explain(args),
+            Command::Diff(args) => self.diff(args),
+            Command::InitPolicy => {
+                print!("{}", mcpwn::policy::TEMPLATE);
+                Ok(exit::CLEAN)
+            }
         }
     }
 
@@ -197,7 +254,7 @@ impl Cli {
 
         // Only servers actually enumerated take part in lock comparison: an
         // unreachable one has an empty tool list, which must not read as "every
-        // tool was removed" — nor overwrite its baseline on --update-lock.
+        // tool was removed", nor overwrite its baseline on --update-lock.
         let observed: Vec<(ServerId, Vec<mcpwn::ToolManifest>)> = enumerated
             .iter()
             .filter(|e| e.outcome.is_enumerated())
@@ -223,10 +280,17 @@ impl Cli {
             skip_global: false,
         })
         .with_registry(registry);
-        let report = analyzer.analyze(&servers);
+        let mut report = analyzer.analyze(&servers);
+
+        let policy = self.read_policy(args)?;
+        let effect = policy.apply(&mut report);
+        let fail_on = args
+            .fail_on
+            .map(Into::into)
+            .unwrap_or_else(|| policy.fail_on());
 
         let mut stdout = io::stdout().lock();
-        self.emit(&report, args.format, &mut stdout)?;
+        self.emit_report(&report, &enumerated, args.format, &mut stdout)?;
         if args.format == Format::Terminal {
             InventoryRenderer::new()
                 .color(self.use_color())
@@ -236,13 +300,129 @@ impl Cli {
         stdout.flush()?;
 
         self.emit_warnings(&loaded, &enumerated);
+        // What the policy removed is said out loud: silently dropped findings
+        // are how a policy file rots into a blindfold.
+        if !effect.is_empty() {
+            self.warn(&format!(
+                "policy applied: {} finding(s) suppressed, {} rule(s) disabled, {} re-tuned",
+                effect.suppressed, effect.disabled, effect.retuned
+            ));
+        }
         self.write_lock(args, &lock_path, existing, &observed)?;
 
-        Ok(if report.is_empty() {
-            exit::CLEAN
-        } else {
-            exit::FINDINGS
-        })
+        let failing = report.max_severity().is_some_and(|worst| worst >= fail_on);
+        Ok(if failing { exit::FINDINGS } else { exit::CLEAN })
+    }
+
+    /// Load the policy, unless told not to.
+    fn read_policy(&self, args: &ScanArgs) -> Result<Policy> {
+        if args.no_policy {
+            return Ok(Policy::default());
+        }
+        let explicit = args.policy.is_some();
+        let path = args
+            .policy
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_POLICY_FILE));
+
+        match Policy::load(&path) {
+            Ok(Some(policy)) => Ok(policy),
+            Ok(None) => {
+                if explicit {
+                    anyhow::bail!("{}: no such policy file", path.display());
+                }
+                Ok(Policy::default())
+            }
+            // A broken policy is a hard error, unlike a broken lockfile: a
+            // typo that silently disables a rule is exactly the failure mode
+            // the file exists to avoid.
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// `mcpwn diff before.lock after.lock`.
+    fn diff(&self, args: &DiffArgs) -> Result<i32> {
+        let load = |path: &Path| -> Result<Lock> {
+            Lock::load(path)?.ok_or_else(|| anyhow::anyhow!("{}: no such lockfile", path.display()))
+        };
+        let before = load(&args.before)?;
+        let after = load(&args.after)?;
+
+        let mut stdout = io::stdout().lock();
+        let mut changed = false;
+
+        let ids: std::collections::BTreeSet<&mcpwn::ServerId> = before
+            .servers
+            .iter()
+            .chain(after.servers.iter())
+            .map(|s| &s.id)
+            .collect();
+
+        for id in ids {
+            match (before.server(id), after.server(id)) {
+                (Some(_), None) => {
+                    changed = true;
+                    writeln!(stdout, "- server removed  {id}")?;
+                }
+                (None, Some(server)) => {
+                    changed = true;
+                    writeln!(
+                        stdout,
+                        "+ server added    {id} ({} tool(s))",
+                        server.tools.len()
+                    )?;
+                }
+                (Some(old), Some(new)) => {
+                    // Reuse the comparison the check itself uses, so `diff` and
+                    // a scan can never disagree about what changed.
+                    for change in Lock::compare_locked(old, new) {
+                        changed = true;
+                        match change {
+                            ToolChange::Mutated { name, fields, .. } => writeln!(
+                                stdout,
+                                "~ tool changed    {id}::{name} ({})",
+                                if fields.is_empty() {
+                                    "content".to_owned()
+                                } else {
+                                    fields.join(", ")
+                                }
+                            )?,
+                            ToolChange::Added { name } => {
+                                writeln!(stdout, "+ tool added      {id}::{name}")?
+                            }
+                            ToolChange::Removed { name } => {
+                                writeln!(stdout, "- tool removed    {id}::{name}")?
+                            }
+                        }
+                    }
+                }
+                (None, None) => {}
+            }
+        }
+
+        if !changed {
+            writeln!(stdout, "the two lockfiles are equivalent")?;
+        }
+        stdout.flush()?;
+        Ok(if changed { exit::FINDINGS } else { exit::CLEAN })
+    }
+
+    fn emit_report<W: Write>(
+        &self,
+        report: &Report,
+        enumerated: &[EnumeratedServer],
+        format: Format,
+        out: &mut W,
+    ) -> Result<()> {
+        if format == Format::Json {
+            // The enumerated tools travel with the report: without them there
+            // is no machine-readable way to see what a `--url` scan actually
+            // found.
+            let payload = serde_json::json!({ "report": report, "servers": enumerated });
+            writeln!(out, "{}", serde_json::to_string_pretty(&payload)?)?;
+            return Ok(());
+        }
+        self.emit(report, format, out)
     }
 
     fn emit<W: Write>(&self, report: &Report, format: Format, out: &mut W) -> Result<()> {
@@ -254,6 +434,7 @@ impl Cli {
                     .render(report, out)?;
             }
             Format::Sarif => writeln!(out, "{}", sarif::to_sarif_string(report)?)?,
+            // Handled by `emit_report`, which attaches the enumerated tools.
             Format::Json => writeln!(out, "{}", report.to_json()?)?,
         }
         Ok(())
@@ -409,7 +590,7 @@ impl Source<'_> {
 /// Resolve a source into servers, then statically enumerate them.
 ///
 /// Enumeration is static-only: HTTP servers are queried, stdio servers are
-/// never launched. Both sources reach the *same* `enumerate_all` call — a
+/// never launched. Both sources reach the *same* `enumerate_all` call; a
 /// direct endpoint is turned into an ordinary `ServerManifest` first, so there
 /// is one enumeration path, not two.
 fn collect(

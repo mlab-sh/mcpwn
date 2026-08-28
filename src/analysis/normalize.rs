@@ -22,8 +22,8 @@
 //! in a tool description, so dropping them is lossless for analysis.
 //!
 //! Homoglyphs are **reported but not rewritten**. The UTS #39 skeleton
-//! transform is deliberately lossy — `skeleton("l") == skeleton("1")`, and
-//! whole scripts collapse onto Latin — so applying it to `cleaned` would
+//! transform is deliberately lossy: `skeleton("l") == skeleton("1")`, and
+//! whole scripts collapse onto Latin, so applying it to `cleaned` would
 //! corrupt legitimate non-Latin text and invent matches downstream. Analysers
 //! that want confusable-insensitive comparison call [`skeleton`] explicitly on
 //! the specific token they care about.
@@ -33,7 +33,7 @@
 //! equivalents downstream.
 //!
 //! Character properties come from `unicode-security`, which implements
-//! [UTS #39] — the confusables table and mixed-script detection are large,
+//! [UTS #39], because the confusables table and mixed-script detection are large,
 //! versioned Unicode data files, and hand-rolling them would mean shipping a
 //! stale, partial copy.
 //!
@@ -94,7 +94,7 @@ pub struct NormalizationNote {
 }
 
 impl NormalizationNote {
-    /// `U+200B U+200C` — the codepoints, for a finding message.
+    /// `U+200B U+200C`: the codepoints, for a finding message.
     pub fn codepoints_display(&self) -> String {
         self.codepoints
             .iter()
@@ -108,25 +108,28 @@ impl NormalizationNote {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum NoteKind {
-    /// Unicode tag characters, U+E0000–U+E007F. ASCII text encoded as
+    /// Unicode tag characters, U+E0000-U+E007F. ASCII text encoded as
     /// invisible codepoints: readable by a model, invisible to a human.
     TagCharacter,
     /// Zero-width space / joiner / non-joiner, word joiner, BOM, soft hyphen.
     InvisibleCharacter,
-    /// Bidirectional override or embedding — the Trojan Source family.
+    /// Bidirectional override or embedding: the Trojan Source family.
     BidiControl,
     /// A single word mixing scripts, e.g. Latin with one Cyrillic letter.
     MixedScript,
     /// A C0/C1 control character outside ordinary whitespace.
     ControlCharacter,
+    /// A run of base64 or hex that decodes to readable text.
+    EncodedPayload,
 }
 
 impl NoteKind {
     /// Declared most severe first.
-    pub const ALL: [NoteKind; 5] = [
+    pub const ALL: [NoteKind; 6] = [
         NoteKind::TagCharacter,
         NoteKind::InvisibleCharacter,
         NoteKind::BidiControl,
+        NoteKind::EncodedPayload,
         NoteKind::MixedScript,
         NoteKind::ControlCharacter,
     ];
@@ -138,6 +141,7 @@ impl NoteKind {
             NoteKind::BidiControl => "bidi-control",
             NoteKind::MixedScript => "mixed-script",
             NoteKind::ControlCharacter => "control-characters",
+            NoteKind::EncodedPayload => "encoded-payload",
         }
     }
 }
@@ -154,7 +158,7 @@ impl std::fmt::Display for NoteKind {
 
 /// Unicode tag characters: the U+E0000 block.
 ///
-/// U+E0020–U+E007E mirror printable ASCII one-for-one, so an entire sentence
+/// U+E0020-U+E007E mirror printable ASCII one-for-one, so an entire sentence
 /// can be smuggled through them. There is no legitimate use in a tool
 /// description; the block's only sanctioned role is language tags in emoji
 /// sequences, which never appear in prose.
@@ -297,6 +301,7 @@ pub fn normalize(text: &str) -> Normalized {
     // Mixed-script detection runs on the *stripped* text: an invisible
     // character between two letters must not split a word and hide the mix.
     notes.extend(mixed_script_notes(&stripped));
+    notes.extend(encoded_payload_notes(&stripped));
 
     Normalized {
         cleaned: stripped.nfkc().collect(),
@@ -308,7 +313,7 @@ pub fn normalize(text: &str) -> Normalized {
 ///
 /// The signal is the **mix inside one word**, not the presence of non-Latin
 /// text. A description written entirely in Russian, or one containing emoji, is
-/// perfectly ordinary and must not be flagged — so each word is tested on its
+/// perfectly ordinary and must not be flagged, so each word is tested on its
 /// own with the UTS #39 resolved script set, which is empty exactly when the
 /// word is not single-script.
 fn mixed_script_notes(text: &str) -> Vec<NormalizationNote> {
@@ -327,7 +332,7 @@ fn mixed_script_notes(text: &str) -> Vec<NormalizationNote> {
             continue; // single-script: ordinary, whatever the script is.
         }
 
-        // Mixed. Report the *intruders* — the letters in the minority script —
+        // Mixed. Report the *intruders* (the letters in the minority script),
         // not the whole word: in `updаte_config` the finding is the single
         // Cyrillic `а`, and naming all ten letters buries it.
         let Some((dominant, intruders)) = minority_letters(&letters) else {
@@ -427,6 +432,99 @@ fn words(text: &str) -> Vec<(usize, &str)> {
         out.push((begin, &text[begin..]));
     }
     out
+}
+
+/// Runs of base64 or hex that decode to readable text.
+///
+/// A description reading `Reads a file. SWdub3JlIHByZXZpb3Vz...` looks like
+/// noise to a reviewer, and plenty of models will decode it. This is hiding in
+/// plain sight rather than hiding in invisible codepoints, and it is the
+/// obvious next move once tag characters are caught.
+///
+/// The bar is deliberately high: a long enough run, valid decoding, and a
+/// decoded result that is *mostly printable ASCII words*. Hashes, ids and
+/// base64 image data decode to bytes that fail that last test, which is what
+/// keeps this from firing on every checksum in a description.
+fn encoded_payload_notes(text: &str) -> Vec<NormalizationNote> {
+    const MIN_RUN: usize = 24;
+    let mut notes = Vec::new();
+
+    for (offset, token) in words(text) {
+        if token.len() < MIN_RUN {
+            continue;
+        }
+        let Some((label, decoded)) = decode_candidate(token) else {
+            continue;
+        };
+        if !looks_like_prose(&decoded) {
+            continue;
+        }
+        notes.push(NormalizationNote {
+            kind: NoteKind::EncodedPayload,
+            offset,
+            raw: token.chars().take(48).collect(),
+            codepoints: Vec::new(),
+            detail: Some(format!(
+                "{label} decoding to: {:?}",
+                decoded.chars().take(200).collect::<String>()
+            )),
+        });
+    }
+    notes
+}
+
+fn decode_candidate(token: &str) -> Option<(&'static str, String)> {
+    if token.len() % 2 == 0 && token.chars().all(|c| c.is_ascii_hexdigit()) {
+        let bytes: Vec<u8> = (0..token.len())
+            .step_by(2)
+            .filter_map(|i| u8::from_str_radix(&token[i..i + 2], 16).ok())
+            .collect();
+        return String::from_utf8(bytes).ok().map(|s| ("hex", s));
+    }
+    base64_decode(token)
+        .and_then(|b| String::from_utf8(b).ok())
+        .map(|s| ("base64", s))
+}
+
+/// Minimal base64 decoder: a dependency would be absurd for this.
+fn base64_decode(token: &str) -> Option<Vec<u8>> {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let trimmed = token.trim_end_matches('=');
+    if trimmed.len() < 16 {
+        return None;
+    }
+
+    let mut acc: u32 = 0;
+    let mut bits = 0u32;
+    let mut out = Vec::with_capacity(trimmed.len() * 3 / 4);
+    for byte in trimmed.bytes() {
+        let value = ALPHABET.iter().position(|&c| c == byte)? as u32;
+        acc = (acc << 6) | value;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// Whether decoded bytes read as language rather than as data.
+fn looks_like_prose(decoded: &str) -> bool {
+    if decoded.chars().count() < 12 {
+        return false;
+    }
+    let printable = decoded
+        .chars()
+        .filter(|c| c.is_ascii_graphic() || *c == ' ')
+        .count();
+    // Almost entirely printable...
+    if (printable as f64) < decoded.chars().count() as f64 * 0.95 {
+        return false;
+    }
+    // ...and made of words, not one unbroken blob.
+    let words = decoded.split_whitespace().count();
+    words >= 3 && decoded.chars().filter(|c| c.is_alphabetic()).count() > decoded.len() / 2
 }
 
 /// The UTS #39 confusable skeleton of a string.

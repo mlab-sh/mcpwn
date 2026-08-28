@@ -12,7 +12,7 @@
 //! ```
 //!
 //! Each server can be entirely legitimate; the environment assembled from them
-//! is not. That is why this is a [`GlobalCheck`] — the flow routinely crosses
+//! is not. That is why this is a [`GlobalCheck`]: the flow routinely crosses
 //! servers, and no per-tool view can see it.
 //!
 //! # Why one finding and not N³
@@ -249,9 +249,9 @@ fn finding(graph: &FlowGraph, chain: FlowChain) -> Finding {
 
     if !clear {
         message.push_str(
-            " At least one link rests on an ambiguous tag — a network tool whose direction could \
+            " At least one link rests on an ambiguous tag: a network tool whose direction could \
              not be determined is assumed to do both, on the principle that a missed flow is worse \
-             than one to check — so this is reported as High rather than Critical.",
+             than one to check, so this is reported as High rather than Critical.",
         );
     }
 

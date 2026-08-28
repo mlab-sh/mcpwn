@@ -1,6 +1,6 @@
 //! Shared test scaffolding: a throwaway directory and a minimal HTTP server.
 //!
-//! Deliberately dependency-free — the point of these tests is to prove mcpwn
+//! Deliberately dependency-free: the point of these tests is to prove mcpwn
 //! reaches out over the network only when it is safe to, so the harness stays
 //! something we can read end to end.
 

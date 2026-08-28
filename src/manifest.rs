@@ -1,7 +1,7 @@
 //! In-memory model of an MCP server and the tools it exposes.
 //!
 //! Parsing (from `mcp.json`, `claude_desktop_config.json`, a `tools/list`
-//! capture, ...) is **not implemented yet** — only the shape is fixed here so
+//! capture, ...) is **not implemented yet**: only the shape is fixed here so
 //! the rest of the engine can be written against it.
 
 use std::collections::BTreeMap;
@@ -86,7 +86,7 @@ impl ServerManifest {
     }
 }
 
-/// One tool advertised by a server — the primary attack surface.
+/// One tool advertised by a server: the primary attack surface.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolManifest {
     pub name: String,

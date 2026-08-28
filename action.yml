@@ -1,0 +1,81 @@
+name: "mcpwn"
+description: "Static security scan of the MCP server configurations in a repository."
+author: "Sn0wAlice"
+branding:
+  icon: shield
+  color: red
+
+inputs:
+  path:
+    description: "Directory to scan. Defaults to the repository root."
+    required: false
+    default: "."
+  policy:
+    description: "Path to an mcpwn.toml policy file. Optional."
+    required: false
+  lock:
+    description: "Path to the mcp.lock baseline. Optional; rug-pull detection is skipped without one."
+    required: false
+  fail-on:
+    description: "Lowest severity that fails the job: critical, high, medium, low, info."
+    required: false
+    default: "high"
+  sarif-file:
+    description: "Where to write the SARIF report."
+    required: false
+    default: "mcpwn.sarif"
+  upload-sarif:
+    description: "Upload the SARIF to GitHub code scanning. Needs `security-events: write`."
+    required: false
+    default: "true"
+
+outputs:
+  sarif-file:
+    description: "Path to the SARIF report that was written."
+    value: ${{ steps.scan.outputs.sarif-file }}
+  findings:
+    description: "Number of findings reported."
+    value: ${{ steps.scan.outputs.findings }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install mcpwn
+      shell: bash
+      run: cargo install --locked --git https://github.com/mlab-sh/mcpwn mcpwn
+
+    - name: Scan
+      id: scan
+      shell: bash
+      run: |
+        set -o pipefail
+        args=("${{ inputs.path }}" --format sarif)
+        [ -n "${{ inputs.policy }}" ] && args+=(--policy "${{ inputs.policy }}")
+        [ -n "${{ inputs.lock }}" ]   && args+=(--lock "${{ inputs.lock }}")
+        args+=(--fail-on "${{ inputs.fail-on }}")
+
+        # SARIF goes to the file; the exit code is captured, not swallowed, so
+        # the upload still happens on a failing scan.
+        set +e
+        mcpwn scan "${args[@]}" > "${{ inputs.sarif-file }}"
+        code=$?
+        set -e
+
+        findings=$(python3 -c "import json,sys;print(len(json.load(open('${{ inputs.sarif-file }}'))['runs'][0]['results']))" 2>/dev/null || echo 0)
+        echo "sarif-file=${{ inputs.sarif-file }}" >> "$GITHUB_OUTPUT"
+        echo "findings=$findings" >> "$GITHUB_OUTPUT"
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+
+        # Human-readable summary in the job log, whatever the outcome.
+        mcpwn scan "${args[@]/--format sarif/}" --no-color || true
+
+    - name: Upload SARIF
+      if: ${{ inputs.upload-sarif == 'true' && always() }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ steps.scan.outputs.sarif-file }}
+        category: mcpwn
+
+    - name: Fail if the scan did
+      shell: bash
+      run: exit ${{ steps.scan.outputs.exit-code }}

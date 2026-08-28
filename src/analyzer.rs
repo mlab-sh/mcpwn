@@ -1,7 +1,7 @@
 //! The public entry point of the engine.
 //!
-//! Feed it [`ServerManifest`]s, get a [`Report`] back. It owns the *pipeline* —
-//! the order checks run in and how their findings are aggregated — but knows
+//! Feed it [`ServerManifest`]s, get a [`Report`] back. It owns the *pipeline*,
+//! the order checks run in and how their findings are aggregated, but knows
 //! nothing about any individual check: that list lives in
 //! [`Registry::builtin`].
 
@@ -44,7 +44,7 @@ impl Analyzer {
         }
     }
 
-    /// Replace the check set — used by tests to exercise one check alone.
+    /// Replace the check set: used by tests to exercise one check alone.
     pub fn with_registry(mut self, registry: Registry) -> Self {
         self.registry = registry;
         self
@@ -66,6 +66,12 @@ impl Analyzer {
         meta.servers = servers.len();
         meta.tools = ctx.tool_count();
         let mut report = Report::new(meta);
+
+        for server in servers {
+            for check in self.registry.server_checks() {
+                report.extend(check.check(server, &ctx));
+            }
+        }
 
         for tool in ctx.tools() {
             for check in self.registry.tool_checks() {

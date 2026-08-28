@@ -5,8 +5,8 @@
 //! A capability is a statement of attack surface, **not an accusation**. A tool
 //! named `run_command` that takes a `command` string will be flagged, and that
 //! is correct: it can execute commands. The finding says so and nothing more.
-//! Deciding whether that is acceptable is the reader's job, and later checks —
-//! poisoning, toxic flows — are what turn a capability into a suspicion.
+//! Deciding whether that is acceptable is the reader's job, and later checks,
+//! poisoning, toxic flows: are what turn a capability into a suspicion.
 //!
 //! Expect legitimate tools to appear here. A scan of a filesystem server that
 //! reported nothing would be the broken one.
@@ -20,14 +20,14 @@
 //!
 //! Two further filters keep the noise down:
 //!
-//! * only text-carrying parameters qualify — a boolean `dry_run` cannot hold a
+//! * only text-carrying parameters qualify: a boolean `dry_run` cannot hold a
 //!   command line (see [`Param::is_texty`]);
 //! * a parameter constrained by an `enum` is downgraded one severity level,
 //!   since it cannot carry arbitrary input.
 //!
 //! Descriptions are a **secondary** signal: a name match is high confidence, a
 //! description-only match is low. Some patterns are description-gated on
-//! purpose — `query` alone is far too common to flag, and only counts when the
+//! purpose: `query` alone is far too common to flag, and only counts when the
 //! description says it is SQL or code.
 
 use crate::analysis::check::{ScanContext, ToolCheck, ToolContext};
@@ -148,15 +148,15 @@ impl Capability {
 // THE PATTERN TABLE
 //
 // This is the whole detection surface: everything the check knows lives here.
-// Editing it is how you tune the analyser — there are no keywords buried in the
+// Editing it is how you tune the analyser: there are no keywords buried in the
 // code below.
 //
-//  * `names`        — matched against whole tokens of the parameter name.
+//  * `names`: matched against whole tokens of the parameter name.
 //                     `shell_command`, `shellCommand` and `command` all
 //                     tokenise to include `command`; `recommendation` does not.
-//  * `descriptions` — matched as substrings of the lowercased description.
+//  * `descriptions`: matched as substrings of the lowercased description.
 //                     Secondary signal: on its own it yields low confidence.
-//  * `name_needs_description` — the name tokens are too common to trust alone
+//  * `name_needs_description`: the name tokens are too common to trust alone
 //                     (`query`, `run`); a description match is also required.
 // ---------------------------------------------------------------------------
 
@@ -440,7 +440,7 @@ fn strongest_match(param: &Param) -> Option<Match> {
             // A `name_needs_description` entry carries deliberately weak
             // needles (`shell`, `command`) that only serve to confirm a name.
             // Letting them fire alone flags every parameter whose description
-            // merely mentions a shell — e.g. a `language` enum listing "bash".
+            // merely mentions a shell: e.g. a `language` enum listing "bash".
             Evidence1::DescriptionOnly
         } else {
             continue;

@@ -438,7 +438,7 @@ fn header(response: &ureq::http::Response<ureq::Body>, name: &str) -> Option<Str
 ///
 /// The spec only says the final response *SHOULD* terminate an SSE stream. A
 /// server that leaves it open would otherwise hang the scan until the global
-/// timeout even though the answer already arrived — which is exactly what a
+/// timeout even though the answer already arrived; which is exactly what a
 /// real public server was observed doing. So for SSE we stop at the first
 /// complete JSON-RPC response instead of reading to EOF.
 fn read_body(reader: impl Read, is_sse: bool) -> Result<String, String> {
@@ -571,14 +571,14 @@ fn snippet(text: &str) -> String {
 fn with_sse_hint(url: &str, error: String) -> String {
     let path = url.split(['?', '#']).next().unwrap_or(url);
     if path.trim_end_matches('/').ends_with("/sse") {
-        format!("{error} — this looks like the deprecated HTTP+SSE endpoint; try the Streamable HTTP one (often /mcp)")
+        format!("{error}; this looks like the deprecated HTTP+SSE endpoint; try the Streamable HTTP one (often /mcp)")
     } else {
         error
     }
 }
 
 /// Describe a non-JSON-RPC HTTP failure, keeping the status and what the server
-/// actually said — both are what a user needs to act on.
+/// actually said: both are what a user needs to act on.
 fn http_failure(status: u16, body: &str) -> String {
     let hint = match status {
         401 | 403 => " (the endpoint requires authentication)",
@@ -684,7 +684,7 @@ pub fn parse_header(raw: &str) -> crate::Result<(String, String)> {
     }
 
     // RFC 9110: optional whitespace around a field value is separator, not
-    // value — on both sides.
+    // value: on both sides.
     let value = value.trim();
     if value.is_empty() {
         return Err(crate::Error::header(
@@ -786,7 +786,7 @@ fn endpoint_label(url: &str) -> String {
 ///
 /// **Not implemented.** No MCP client writes such a file today and no location
 /// is standardised, so there is nothing to read. If one appears, this is where
-/// it plugs in — it is the only way a stdio server could ever be enumerated
+/// it plugs in: it is the only way a stdio server could ever be enumerated
 /// while keeping the no-execution guarantee.
 pub fn tools_from_local_manifest(_server: &ServerManifest) -> Option<Vec<ToolManifest>> {
     None

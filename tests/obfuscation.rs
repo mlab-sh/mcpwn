@@ -1,7 +1,7 @@
 //! Unicode obfuscation: the normalisation layer on its own, then the check.
 //!
 //! The two anti-false-positive tests carry the most weight here. Text that is
-//! merely non-Latin — a Russian sentence, an emoji — is ordinary, and a check
+//! merely non-Latin (a Russian sentence, an emoji) is ordinary, and a check
 //! that flags it is worse than no check at all.
 
 use serde_json::json;
@@ -102,7 +102,7 @@ fn normalize_leaves_ordinary_text_untouched() {
     for text in [
         "Read a file from disk.",
         "Search the docs.\nReturns markdown.\tTab separated.",
-        "Prix : 12 € — déjà vu, naïve, 日本語のテキスト 🎉",
+        "Prix : 12 €; déjà vu, naïve, 日本語のテキスト 🎉",
     ] {
         let result = normalize::normalize(text);
         assert!(
@@ -115,7 +115,7 @@ fn normalize_leaves_ordinary_text_untouched() {
 
 #[test]
 fn skeleton_is_exposed_but_not_applied_to_cleaned() {
-    // A Cyrillic `а` survives `cleaned` verbatim — rewriting it would corrupt
+    // A Cyrillic `а` survives `cleaned` verbatim: rewriting it would corrupt
     // legitimate non-Latin text.
     let result = normalize::normalize("p\u{0430}yment");
     assert_eq!(result.cleaned, "p\u{0430}yment");
@@ -211,7 +211,7 @@ fn a_genuinely_multilingual_token_is_not_flagged() {
             .iter()
             .filter(|f| f.id.as_str() == "MCPWN-OBF-004")
             .collect();
-        // Either not flagged, or flagged with a single named intruder — never
+        // Either not flagged, or flagged with a single named intruder; never
         // with the whole token listed.
         for finding in mixed {
             assert!(
@@ -280,7 +280,7 @@ fn legitimate_non_latin_text_is_not_a_mixed_script_finding() {
         "ファイルをディスクから読み取ります。",             // all Japanese
         "Διαβάζει ένα αρχείο από τον δίσκο.",               // all Greek
         "Reads a file 📁 and returns it 🎉",                // emoji
-        "Lit un fichier — déjà là, naïve, cœur, Straße.",   // accented Latin
+        "Lit un fichier: déjà là, naïve, cœur, Straße.",    // accented Latin
         "Reads файл from disk.",                            // separate words, each single-script
     ] {
         let findings = check(&described("read_file", description));

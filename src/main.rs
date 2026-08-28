@@ -1,4 +1,4 @@
-//! `mcpwn` — thin shell around the analysis engine: parse args, run the
+//! `mcpwn`: thin shell around the analysis engine: parse args, run the
 //! `Analyzer`, render, pick an exit code.
 
 #![warn(clippy::all)]
