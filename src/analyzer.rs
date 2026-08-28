@@ -1,10 +1,12 @@
 //! The public entry point of the engine.
 //!
-//! Feed it [`ServerManifest`]s, get a [`Report`] back. It owns the order in
-//! which the detection modules run and is the only place that knows they exist;
-//! callers never invoke a module directly.
+//! Feed it [`ServerManifest`]s, get a [`Report`] back. It owns the *pipeline* —
+//! the order checks run in and how their findings are aggregated — but knows
+//! nothing about any individual check: that list lives in
+//! [`Registry::builtin`].
 
-use crate::analysis::{flow, roles, rules, schema};
+use crate::analysis::check::ScanContext;
+use crate::analysis::registry::Registry;
 use crate::manifest::ServerManifest;
 use crate::report::{Report, ScanMeta};
 
@@ -13,15 +15,15 @@ use crate::report::{Report, ScanMeta};
 pub struct AnalyzerConfig {
     /// What was scanned, recorded in the report metadata.
     pub target: Option<String>,
-    /// Skip cross-server toxic-flow analysis (single-server scans).
-    pub skip_flow: bool,
+    /// Skip the checks that need to see every server at once.
+    pub skip_global: bool,
 }
 
 /// The analysis engine. Cheap to build, reusable across scans.
 #[derive(Debug)]
 pub struct Analyzer {
     config: AnalyzerConfig,
-    rules: rules::RuleSet,
+    registry: Registry,
 }
 
 impl Default for Analyzer {
@@ -38,42 +40,43 @@ impl Analyzer {
     pub fn with_config(config: AnalyzerConfig) -> Self {
         Self {
             config,
-            rules: rules::RuleSet::builtin(),
+            registry: Registry::builtin(),
         }
     }
 
-    /// Replace the built-in rule set.
-    pub fn with_rules(mut self, rules: rules::RuleSet) -> Self {
-        self.rules = rules;
+    /// Replace the check set — used by tests to exercise one check alone.
+    pub fn with_registry(mut self, registry: Registry) -> Self {
+        self.registry = registry;
         self
     }
 
-    /// Run every detection module over the given servers.
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+
+    /// Run every registered check over the given servers.
     ///
-    /// The modules are all stubs today, so the report comes back with accurate
-    /// metadata and no findings — the wiring is real, the detection is not.
+    /// Per-tool checks run first, then the global ones, so a future global
+    /// check could in principle consider what the per-tool pass produced. Every
+    /// finding lands in the same [`Report`], sorted most severe first.
     pub fn analyze(&self, servers: &[ServerManifest]) -> Report {
+        let ctx = ScanContext::new(servers);
+
         let mut meta = ScanMeta::new(self.config.target.clone());
         meta.servers = servers.len();
-        meta.tools = servers.iter().map(|s| s.tools.len()).sum();
-
+        meta.tools = ctx.tool_count();
         let mut report = Report::new(meta);
 
-        // Per-tool passes.
-        for server in servers {
-            for tool in &server.tools {
-                // Role tagging feeds the flow graph; kept here so a future
-                // flow pass reuses it instead of recomputing.
-                let _tags = roles::tag_tool(server, tool);
-
-                report.extend(self.rules.match_tool(server, tool));
-                report.extend(schema::analyze_tool(server, tool));
+        for tool in ctx.tools() {
+            for check in self.registry.tool_checks() {
+                report.extend(check.check(&tool, &ctx));
             }
         }
 
-        // Cross-server pass.
-        if !self.config.skip_flow {
-            report.extend(flow::analyze(servers));
+        if !self.config.skip_global {
+            for check in self.registry.global_checks() {
+                report.extend(check.check(&ctx));
+            }
         }
 
         report.sort();

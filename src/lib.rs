@@ -27,6 +27,9 @@ pub mod manifest;
 pub mod output;
 pub mod report;
 
+pub use analysis::capabilities::{Capability, CapabilityCheck};
+pub use analysis::check::{GlobalCheck, ScanContext, ToolCheck, ToolContext};
+pub use analysis::registry::Registry;
 pub use analyzer::{Analyzer, AnalyzerConfig};
 pub use discovery::{Client, ConfigFormat, DiscoveredConfig, Scope};
 pub use enumerate::{EnumeratedServer, Enumeration, StaticEnumerator};

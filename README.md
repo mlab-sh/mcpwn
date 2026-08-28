@@ -13,9 +13,8 @@ run. Remote servers are asked for their tool list over HTTP, which is a
 read-only request; local stdio servers are reported as not enumerable and left
 alone. All *analysis* is static: mcpwn reads manifests and reasons about them.
 
-> Status: **discovery and tool enumeration work, detection does not.** mcpwn
-> finds configs, loads them, and lists the tools of remote servers; the analysis
-> modules are stubs that return no findings. See [Roadmap](#roadmap).
+> Status: **discovery, enumeration and capability analysis work.** One detection
+> family is implemented; the rest are stubs. See [Roadmap](#roadmap).
 
 ## Usage
 
@@ -155,6 +154,77 @@ event) is not implemented.
 Each tool's `inputSchema` is stored **verbatim**: normalising it here would
 destroy the very anomalies the analysis modules exist to find.
 
+### Analysis pipeline
+
+Checks come in **two levels**, because the detections that are coming do not all
+look at the same thing:
+
+| Trait | Sees | For |
+|---|---|---|
+| `ToolCheck` | one tool at a time | capabilities, obfuscation, poisoned descriptions |
+| `GlobalCheck` | every tool of every server at once | toxic flows, shadowing |
+
+A flow only exists *between* tools, often across servers that each look harmless
+alone, so it cannot be expressed one tool at a time — hence the second level,
+wired and exercised today even though its only check is still a stub. Both
+levels receive the same `ScanContext`, so a per-tool check can look around
+without being promoted.
+
+Adding a detection is **one line** in [`Registry::builtin`](src/analysis/registry.rs).
+The analyzer never names a check and no renderer knows any check exists.
+
+### Capability analysis
+
+The first analyser. It walks a tool's `inputSchema` and reports what its
+parameters let the tool *do*.
+
+| Capability | Rule | Base severity |
+|---|---|---|
+| Command execution | `MCPWN-CAP-001` | Critical |
+| Code evaluation | `MCPWN-CAP-002` | Critical |
+| Filesystem access | `MCPWN-CAP-003` | High |
+| Network access | `MCPWN-CAP-004` | High |
+| `x-mcp-header` mirroring | `MCPWN-CAP-005` | Medium |
+
+Execution and evaluation hand an attacker the host. File and network access are
+a level below: they are the *ingredients* of exfiltration rather than
+exfiltration itself, and they are extremely common in tools entitled to them.
+`x-mcp-header` is per the current MCP spec: an annotated property has its value
+copied into an HTTP request header by the client, reaching infrastructure that
+never sees the tool arguments.
+
+Two contextual adjustments, each one level down: a parameter constrained by an
+`enum` cannot carry arbitrary input, and a match found only in a description
+(rather than in the parameter name) is weak evidence and must not outrank a
+solid one.
+
+**A capability is a statement of attack surface, not an accusation.** A tool
+named `run_command` taking a `command` string is flagged, and that is correct —
+it can execute commands. Expect legitimate tools here; a scan of a filesystem
+server that reported nothing would be the broken one. The message says what the
+tool can do and explicitly says it is not evidence of malice. Turning a
+capability into a suspicion is the job of the checks still to come.
+
+#### The pattern table
+
+Everything the analyser knows lives in one table, `PATTERNS` in
+[capabilities.rs](src/analysis/capabilities.rs) — no keywords scattered through
+the code. Three rules keep the false-positive rate down:
+
+* **Names are tokenised, not substring-matched.** `recommendation` does not
+  contain the token `command`; `curl_options` does not contain `url`. Substring
+  matching on these words finds noise faster than findings.
+* **Only text-carrying parameters qualify.** A boolean `dry_run` cannot hold a
+  command line, so the type filter removes a whole class of false positives.
+* **Some names need their description to agree.** `query` is the most common
+  parameter name in search tools; it counts only when the description says SQL
+  or GraphQL. Those weak needles can *never* fire on their own.
+
+Calibrated against three live public servers (DeepWiki, Context7, Microsoft
+Learn — 8 tools). The first run produced 4 false-positive criticals; the rules
+above cut it to a single true positive, `microsoft_docs_fetch(url)`. Both
+regressions are pinned in [tests/capabilities.rs](tests/capabilities.rs).
+
 ### Known limits
 
 * **Only JSON is parsed.** TOML (Codex) and YAML (Continue) files are
@@ -182,7 +252,7 @@ src/
 ├── lib.rs            public API surface + re-exports (Analyzer, Finding, Report…)
 ├── main.rs           binary entry point: parse args, run, pick an exit code
 ├── cli.rs            clap definitions and command dispatch (binary-only)
-├── analyzer.rs       Analyzer — takes manifests, orchestrates the modules, returns a Report
+├── analyzer.rs       the pipeline: runs the registry's checks, aggregates the Report
 ├── discovery.rs      step 1: find config files on disk, classify by client/scope/format
 ├── loading.rs        step 2: read a found file into ServerManifests (per-client root keys)
 ├── enumerate.rs      step 3: list a server's tools — HTTP only, never spawns a process
@@ -191,8 +261,11 @@ src/
 ├── report.rs         Report + ScanMeta — the output container
 ├── error.rs          typed engine errors
 ├── analysis/         the detection modules (no I/O, all return Findings)
+│   ├── check.rs      the ToolCheck / GlobalCheck traits and ScanContext
+│   ├── registry.rs   the list of active checks — add a detection here
+│   ├── capabilities.rs  IMPLEMENTED: what a tool's parameters let it do
 │   ├── normalize.rs  Unicode normalisation of model-visible text
-│   ├── schema.rs     JSON input-schema analysis
+│   ├── schema.rs     JSON Schema flattening (bounded depth, no $ref)
 │   ├── roles.rs      source / ingest / sink tagging
 │   ├── flow.rs       toxic-flow graph and chain walking
 │   └── rules.rs      pattern rules (yara-x seam)
@@ -203,6 +276,7 @@ src/
 tests/
 ├── common/mod.rs         temp dirs and a dependency-free mock HTTP server
 ├── cli.rs                end-to-end runs of the real binary (--url, exclusivity)
+├── capabilities.rs       the capability analyser and the pipeline
 ├── discovery.rs          discovery + loading against real files, per-client fixtures
 ├── enumerate.rs          the MCP client, both protocol eras, and the no-execution proof
 └── report_roundtrip.rs   proves the chain compiles and Report round-trips
@@ -236,8 +310,8 @@ The detection families, one `Category` each. None of them are implemented.
   rewrites the rules for calling it.
 - **Rug pull** — definitions that can change after the user approved them:
   unpinned versions, mutable remote endpoints, dynamic descriptions.
-- **Capability** — excessive or dangerous surface: shell execution, unconstrained
-  paths, free-form object arguments, credential-shaped parameters.
+- ~~**Capability**~~ — **implemented**, see [Capability analysis](#capability-analysis).
+  Still to add: credential-shaped parameters, free-form object arguments.
 - **Toxic flows** — `source -> ingest -> sink` chains across every server loaded
   at once, where each server looks harmless on its own.
 

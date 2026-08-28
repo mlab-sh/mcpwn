@@ -4,8 +4,11 @@
 //! [`crate::finding::Finding`]s. They are orchestrated by
 //! [`crate::analyzer::Analyzer`] and never talk to the terminal.
 
+pub mod capabilities;
+pub mod check;
 pub mod flow;
 pub mod normalize;
+pub mod registry;
 pub mod roles;
 pub mod rules;
 pub mod schema;

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use common::{
     dead_url, http_response, json_200, json_400, spawn_blackhole, spawn_mock, spawn_mock_req,
-    TempDir,
+    spawn_sse_open_ended, TempDir,
 };
 
 use mcpwn::enumerate::{self, Enumeration, StaticEnumerator, PROTOCOL_VERSION};
@@ -375,6 +375,72 @@ fn a_server_with_no_transport_is_not_enumerable() {
         Enumeration::NotPossible { reason } => assert!(reason.contains("transport")),
         other => panic!("expected NotPossible, got {other:?}"),
     }
+}
+
+// --- legacy sessions and open-ended streams ---------------------------------
+
+#[test]
+fn the_legacy_session_id_is_captured_and_replayed() {
+    // Regression from a live scan of gitmcp.io: protocol revisions 2025-03-26
+    // through 2025-11-25 mint a session on `initialize` and reject every later
+    // request that does not carry it.
+    const SESSION: &str = "sess-abc123";
+
+    let url = spawn_mock_req(|request| {
+        if request
+            .body
+            .contains("io.modelcontextprotocol/protocolVersion")
+        {
+            return json_400(
+                r#"{"jsonrpc":"2.0","error":{"code":-32000,"message":"Bad Request: Mcp-Session-Id header is required"},"id":null}"#,
+            );
+        }
+        if request.body.contains("\"initialize\"") {
+            return http_response(
+                200,
+                "OK",
+                "application/json",
+                r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{}}}"#,
+            )
+            .replace(
+                "content-type: application/json",
+                &format!("content-type: application/json\r\nmcp-session-id: {SESSION}"),
+            );
+        }
+        // Every later request must carry the session the server minted.
+        if !request.has_header("mcp-session-id", SESSION) {
+            return json_400(
+                r#"{"jsonrpc":"2.0","error":{"code":-32000,"message":"Bad Request: Mcp-Session-Id header is required"},"id":null}"#,
+            );
+        }
+        json_200(&TOOLS_RESULT.replace("\"id\": 1", "\"id\": 2"))
+    });
+
+    let result = fast().enumerate(http_server(&url));
+
+    assert!(result.outcome.is_enumerated(), "{:?}", result.outcome);
+    assert_eq!(result.tool_count(), 2);
+}
+
+#[test]
+fn an_sse_stream_that_never_closes_does_not_hang_the_scan() {
+    // The spec only says the final response *SHOULD* end the stream. Reading to
+    // EOF here would block until the global timeout even though the answer has
+    // already arrived.
+    let url = spawn_sse_open_ended(TOOLS_RESULT.to_owned());
+
+    let started = std::time::Instant::now();
+    let result = StaticEnumerator::new()
+        .timeout(Duration::from_secs(10))
+        .enumerate(http_server(&url));
+    let elapsed = started.elapsed();
+
+    assert!(result.outcome.is_enumerated(), "{:?}", result.outcome);
+    assert_eq!(result.tool_count(), 2);
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "the scan waited for a stream that never ends: {elapsed:?}"
+    );
 }
 
 // --- direct endpoint entry -------------------------------------------------

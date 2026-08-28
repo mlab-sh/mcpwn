@@ -164,7 +164,7 @@ impl Cli {
 
         let analyzer = Analyzer::with_config(AnalyzerConfig {
             target: Some(source.describe()),
-            skip_flow: false,
+            skip_global: false,
         });
         let report = analyzer.analyze(&servers);
 
@@ -196,8 +196,8 @@ impl Cli {
                     .render(report, out)?;
                 writeln!(
                     out,
-                    "\nnote: configs are discovered and loaded, but tool enumeration and the \
-                     detection modules are not implemented yet."
+                    "\nnote: capability analysis only; the other detection modules are not \
+                     implemented yet. Tools of stdio servers are never enumerated."
                 )?;
             }
             Format::Sarif => writeln!(out, "{}", sarif::to_sarif_string(report)?)?,

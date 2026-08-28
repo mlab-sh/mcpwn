@@ -101,6 +101,37 @@ pub fn spawn_mock_req(responder: impl Fn(MockRequest) -> String + Send + Sync + 
     format!("http://{addr}/mcp")
 }
 
+/// An SSE endpoint that sends its response and then **keeps the stream open**.
+///
+/// The spec only says the final response *SHOULD* terminate the stream, and a
+/// real public server was observed leaving it open. A client that reads to EOF
+/// hangs here until its timeout.
+pub fn spawn_sse_open_ended(payload: String) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let addr = listener.local_addr().expect("local addr");
+
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let payload = payload.clone();
+            thread::spawn(move || {
+                let _ = read_http_request(&mut stream);
+                // No content-length and no close: the body ends only when the
+                // connection does, and it never does.
+                let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\n\r\n";
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(
+                    format!("event: message\ndata: {}\n\n", payload.replace('\n', "")).as_bytes(),
+                );
+                let _ = stream.flush();
+                thread::sleep(Duration::from_secs(30));
+            });
+        }
+    });
+
+    format!("http://{addr}/mcp")
+}
+
 /// A server that accepts the connection and then never answers.
 pub fn spawn_blackhole() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");

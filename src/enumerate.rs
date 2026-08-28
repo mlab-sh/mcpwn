@@ -31,6 +31,7 @@
 //! 3. A `400`/`404`/`405` *without* a modern error body means a legacy server:
 //!    fall back to `initialize` -> `notifications/initialized` -> `tools/list`.
 
+use std::io::{BufRead, BufReader, Read};
 use std::time::Duration;
 
 use serde_json::{json, Map, Value};
@@ -42,6 +43,10 @@ pub const PROTOCOL_VERSION: &str = "2026-07-28";
 
 /// Legacy revisions understood by the `initialize` fallback, newest first.
 pub const LEGACY_PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
+
+/// Cap on a response body, so a hostile server cannot make a scan allocate
+/// without limit.
+const MAX_BODY_BYTES: u64 = 8 * 1024 * 1024;
 
 /// `UnsupportedProtocolVersionError`, per the 2026-07-28 error-code allocation.
 const ERR_UNSUPPORTED_PROTOCOL_VERSION: i64 = -32022;
@@ -239,10 +244,11 @@ impl StaticEnumerator {
             "params": { "_meta": self.request_meta(version) }
         });
 
-        let (status, text) = match self.post(url, &body, Some(version), "tools/list") {
-            Ok(pair) => pair,
+        let response = match self.post(url, &body, Some(version), "tools/list", None) {
+            Ok(response) => response,
             Err(err) => return Probe::Fatal(err),
         };
+        let (status, text) = (response.status, response.body);
 
         // Per the spec's backward-compatibility rules, these statuses mean
         // "legacy server" *only* when the body is not a modern JSON-RPC error.
@@ -308,10 +314,11 @@ impl StaticEnumerator {
                 "clientInfo": { "name": self.client_name, "version": self.client_version }
             }
         });
-        let (status, text) = self.post(url, &init, None, "initialize")?;
+        let initialized = self.post(url, &init, None, "initialize", None)?;
         // A non-JSON-RPC body here means the endpoint does not speak MCP at
         // all; blaming `initialize` would point the user at the wrong thing.
-        let message = decode_jsonrpc(&text).ok_or_else(|| http_failure(status, &text))?;
+        let message = decode_jsonrpc(&initialized.body)
+            .ok_or_else(|| http_failure(initialized.status, &initialized.body))?;
         if let Some(error) = message.get("error") {
             return Err(format!("initialize rejected: {}", jsonrpc_message(error)));
         }
@@ -319,15 +326,17 @@ impl StaticEnumerator {
             return Err("initialize: no result and no error".to_owned());
         }
 
+        let session = initialized.session_id.as_deref();
+
         // Required by the legacy lifecycle. A server may 202 or 200 it; either
         // way a failure here is not worth aborting on.
-        let initialized = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-        let _ = self.post(url, &initialized, None, "notifications/initialized");
+        let ack = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+        let _ = self.post(url, &ack, None, "notifications/initialized", session);
 
         let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} });
-        let (status, text) = self.post(url, &list, None, "tools/list")?;
-        let message = decode_jsonrpc(&text)
-            .ok_or_else(|| format!("tools/list: {}", http_failure(status, &text)))?;
+        let listed = self.post(url, &list, None, "tools/list", session)?;
+        let message = decode_jsonrpc(&listed.body)
+            .ok_or_else(|| format!("tools/list: {}", http_failure(listed.status, &listed.body)))?;
         if let Some(error) = message.get("error") {
             return Err(format!("tools/list rejected: {}", jsonrpc_message(error)));
         }
@@ -348,7 +357,7 @@ impl StaticEnumerator {
         })
     }
 
-    /// POST one JSON-RPC message. Returns the HTTP status and the body text.
+    /// POST one JSON-RPC message.
     ///
     /// Non-2xx is *not* an error here: the spec requires reading the body of a
     /// 400 to tell a modern server from a legacy one.
@@ -358,7 +367,8 @@ impl StaticEnumerator {
         body: &Value,
         protocol_version: Option<&str>,
         method: &str,
-    ) -> Result<(u16, String), String> {
+        session: Option<&str>,
+    ) -> Result<HttpResponse, String> {
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(self.timeout))
             .http_status_as_error(false)
@@ -375,6 +385,12 @@ impl StaticEnumerator {
         if let Some(version) = protocol_version {
             request = request.header("mcp-protocol-version", version);
         }
+        // Protocol revisions 2025-03-26..2025-11-25 mint a session on
+        // `initialize` and require it on every later request. Removed in
+        // 2026-07-28, but the legacy fallback still needs it.
+        if let Some(session) = session {
+            request = request.header("mcp-session-id", session);
+        }
         // User-supplied last, but they can never collide with the protocol
         // headers above: `parse_header` refuses those names.
         for (name, value) in &self.headers {
@@ -386,13 +402,78 @@ impl StaticEnumerator {
         let mut response = request
             .send(&payload)
             .map_err(|err| describe_transport_error(&err))?;
+
         let status = response.status().as_u16();
-        let text = response
-            .body_mut()
-            .read_to_string()
-            .map_err(|err| format!("could not read the response body: {err}"))?;
-        Ok((status, text))
+        let session_id = header(&response, "mcp-session-id");
+        let is_sse = header(&response, "content-type")
+            .is_some_and(|v| v.to_ascii_lowercase().contains("text/event-stream"));
+        let body = read_body(response.body_mut().as_reader(), is_sse)?;
+
+        Ok(HttpResponse {
+            status,
+            body,
+            session_id,
+        })
     }
+}
+
+/// One HTTP exchange, reduced to what the enumerator needs.
+#[derive(Debug)]
+struct HttpResponse {
+    status: u16,
+    body: String,
+    /// `Mcp-Session-Id`, when a legacy server minted one.
+    session_id: Option<String>,
+}
+
+fn header(response: &ureq::http::Response<ureq::Body>, name: &str) -> Option<String> {
+    response
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
+/// Read a response body, bounded, and **without requiring the stream to end**.
+///
+/// The spec only says the final response *SHOULD* terminate an SSE stream. A
+/// server that leaves it open would otherwise hang the scan until the global
+/// timeout even though the answer already arrived — which is exactly what a
+/// real public server was observed doing. So for SSE we stop at the first
+/// complete JSON-RPC response instead of reading to EOF.
+fn read_body(reader: impl Read, is_sse: bool) -> Result<String, String> {
+    let mut reader = BufReader::new(reader.take(MAX_BODY_BYTES));
+
+    if !is_sse {
+        let mut body = String::new();
+        reader
+            .read_to_string(&mut body)
+            .map_err(|err| format!("could not read the response body: {err}"))?;
+        return Ok(body);
+    }
+
+    let mut collected = String::new();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            // A stream cut short still yields whatever already arrived.
+            Err(_) => break,
+        }
+        collected.push_str(&line);
+
+        if let Some(payload) = line.trim_end().strip_prefix("data:") {
+            if let Ok(value) = serde_json::from_str::<Value>(payload.trim()) {
+                if value.get("id").is_some() && is_jsonrpc(&value) {
+                    // The response we asked for. Nothing after it concerns us.
+                    break;
+                }
+            }
+        }
+    }
+    Ok(collected)
 }
 
 /// Outcome of one modern probe.

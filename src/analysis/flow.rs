@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::analysis::check::{GlobalCheck, ScanContext};
 use crate::analysis::roles::{Role, RoleTags};
 use crate::finding::Finding;
 use crate::manifest::{ServerManifest, ToolRef};
@@ -100,6 +101,35 @@ impl FlowGraph {
     ///
     /// Not implemented yet.
     pub fn chains(&self) -> Vec<FlowChain> {
+        Vec::new()
+    }
+}
+
+/// The toxic-flow analyser.
+///
+/// A [`GlobalCheck`] rather than a per-tool one: a flow only exists *between*
+/// tools, often across servers that each look harmless alone, so it cannot be
+/// expressed one tool at a time. Registered today so the global level of the
+/// pipeline is wired and exercised; the walker itself is still empty.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ToxicFlowCheck;
+
+impl ToxicFlowCheck {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl GlobalCheck for ToxicFlowCheck {
+    fn id(&self) -> &'static str {
+        "toxic-flow"
+    }
+
+    fn description(&self) -> &'static str {
+        "Finds source -> ingest -> sink chains reachable across every loaded server."
+    }
+
+    fn check(&self, _ctx: &ScanContext<'_>) -> Vec<Finding> {
         Vec::new()
     }
 }

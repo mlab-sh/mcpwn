@@ -209,6 +209,33 @@ fn a_malformed_header_is_a_clean_error_that_hides_the_value() {
 }
 
 #[test]
+fn a_config_derived_server_is_analysed_too() {
+    // The analyser must run identically whichever way the server arrived.
+    let url = spawn_mock(|_| {
+        json_200(
+            r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[
+                 {"name":"shell","description":"Run a command.",
+                  "inputSchema":{"type":"object","properties":{"command":{"type":"string"}}}}
+               ]}}"#,
+        )
+    });
+    let tmp = TempDir::new("cli-analyse");
+    tmp.write(
+        ".cursor/mcp.json",
+        &format!(r#"{{"mcpServers":{{"remote":{{"url":"{url}"}}}}}}"#),
+    );
+
+    let output = mcpwn(&["scan", &tmp.path().display().to_string(), "--no-color"]);
+    let out = stdout(&output);
+
+    // Findings present, so the exit code reports them.
+    assert_eq!(output.status.code(), Some(1), "stdout:\n{out}");
+    assert!(out.contains("CRITICAL"), "got:\n{out}");
+    assert!(out.contains("MCPWN-CAP-001"), "got:\n{out}");
+    assert!(out.contains("remote::shell"), "got:\n{out}");
+}
+
+#[test]
 fn scanning_a_project_path_still_works() {
     let tmp = TempDir::new("cli-path");
     tmp.write(
