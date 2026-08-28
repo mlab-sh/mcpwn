@@ -96,8 +96,32 @@ impl TerminalRenderer {
             subjects
         )?;
 
+        // A toxic flow is a sequence, so it is drawn as one: top to bottom,
+        // one link per line. An ASCII graph would be less readable, not more.
         if let Some(flow) = &finding.flow {
-            writeln!(out, "      flow: {}", flow.render_inline())?;
+            let width = flow
+                .steps
+                .iter()
+                .map(|s| s.role.slug().len())
+                .max()
+                .unwrap_or(0);
+            for (i, step) in flow.steps.iter().enumerate() {
+                if i > 0 {
+                    writeln!(out, "      {:>width$}  |", "")?;
+                    writeln!(out, "      {:>width$}  v", "")?;
+                }
+                writeln!(
+                    out,
+                    "      {}  {}",
+                    self.paint(format!("{:>width$}", step.role.slug()), Style::new().bold()),
+                    step.tool
+                )?;
+                if self.verbose {
+                    if let Some(note) = &step.note {
+                        writeln!(out, "      {:>width$}     {note}", "")?;
+                    }
+                }
+            }
         }
 
         if self.verbose {
@@ -155,11 +179,4 @@ fn severity_style(severity: Severity) -> Style {
         Severity::Low => Style::new().blue(),
         Severity::Info => Style::new().dimmed(),
     }
-}
-
-/// Long-form explanation of one rule id, for `mcpwn explain <ID>`.
-///
-/// Not implemented yet.
-pub fn explain(_id: &str) -> Option<String> {
-    None
 }

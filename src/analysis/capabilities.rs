@@ -62,6 +62,21 @@ impl Capability {
         }
     }
 
+    /// Recover the capability a finding id denotes.
+    ///
+    /// Lets a later check consume what this one concluded instead of
+    /// re-analysing every schema.
+    pub fn from_finding_id(id: &str) -> Option<Self> {
+        match id {
+            "MCPWN-CAP-001" => Some(Capability::CommandExecution),
+            "MCPWN-CAP-002" => Some(Capability::CodeEvaluation),
+            "MCPWN-CAP-003" => Some(Capability::FileAccess),
+            "MCPWN-CAP-004" => Some(Capability::NetworkAccess),
+            "MCPWN-CAP-005" => Some(Capability::HeaderSmuggling),
+            _ => None,
+        }
+    }
+
     /// Base severity, before contextual adjustment.
     ///
     /// Execution and evaluation are the two that hand an attacker the host, so

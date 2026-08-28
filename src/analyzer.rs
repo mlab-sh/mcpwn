@@ -74,8 +74,11 @@ impl Analyzer {
         }
 
         if !self.config.skip_global {
+            // Global checks see what the per-tool pass produced, so they can
+            // build on it rather than recompute it.
+            let prior = report.findings.clone();
             for check in self.registry.global_checks() {
-                report.extend(check.check(&ctx));
+                report.extend(check.check(&ctx, &prior));
             }
         }
 

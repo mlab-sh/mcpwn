@@ -45,7 +45,7 @@ impl GlobalCheck for RugPullCheck {
         "Compares each tool against the mcp.lock baseline and reports what changed."
     }
 
-    fn check(&self, ctx: &ScanContext<'_>) -> Vec<Finding> {
+    fn check(&self, ctx: &ScanContext<'_>, _prior: &[Finding]) -> Vec<Finding> {
         let mut findings = Vec::new();
 
         for server in ctx.servers() {

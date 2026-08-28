@@ -425,7 +425,9 @@ fn the_pipeline_aggregates_findings_across_tools_and_servers() {
 
     assert_eq!(report.meta.servers, 2);
     assert_eq!(report.meta.tools, 3);
-    assert_eq!(report.findings.len(), 3, "{:#?}", report.findings);
+    // Three capability findings: `command`, `url`, and the nested `out.path`.
+    let capabilities: Vec<&Finding> = report.by_category(Category::Capability).collect();
+    assert_eq!(capabilities.len(), 3, "{capabilities:#?}");
 
     // Sorted most severe first.
     assert_eq!(report.max_severity(), Some(Severity::Critical));
@@ -436,8 +438,7 @@ fn the_pipeline_aggregates_findings_across_tools_and_servers() {
         .all(|w| w[0].severity >= w[1].severity));
 
     // Findings are attributed to the right server.
-    let subjects: Vec<String> = report
-        .findings
+    let subjects: Vec<String> = capabilities
         .iter()
         .filter_map(|f| f.primary_subject().map(ToString::to_string))
         .collect();
@@ -493,7 +494,7 @@ fn a_custom_registry_replaces_the_builtin_checks() {
         fn description(&self) -> &'static str {
             "reports how many tools it saw"
         }
-        fn check(&self, ctx: &ScanContext<'_>) -> Vec<Finding> {
+        fn check(&self, ctx: &ScanContext<'_>, _prior: &[Finding]) -> Vec<Finding> {
             vec![Finding::builder(
                 "TEST-002",
                 Category::Capability,
@@ -538,7 +539,7 @@ fn global_checks_can_be_skipped() {
         fn description(&self) -> &'static str {
             "always fires"
         }
-        fn check(&self, _: &ScanContext<'_>) -> Vec<Finding> {
+        fn check(&self, _: &ScanContext<'_>, _prior: &[Finding]) -> Vec<Finding> {
             vec![
                 Finding::builder("TEST-003", Category::Capability, Severity::Info, "fired").build(),
             ]

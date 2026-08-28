@@ -49,7 +49,7 @@ fn baseline(servers: &[ServerManifest]) -> Lock {
 fn check(lock: &Lock, servers: &[ServerManifest]) -> Vec<Finding> {
     let observed: BTreeSet<ServerId> = servers.iter().map(ServerId::from_manifest).collect();
     let ctx = ScanContext::new(servers);
-    RugPullCheck::new(lock.clone(), observed).check(&ctx)
+    RugPullCheck::new(lock.clone(), observed).check(&ctx, &[])
 }
 
 fn ids(findings: &[Finding]) -> Vec<&str> {
@@ -317,13 +317,13 @@ fn a_server_that_was_not_enumerated_is_skipped_entirely() {
     let ctx = ScanContext::new(&unreachable);
 
     // Not in `observed`: enumeration failed.
-    let findings = RugPullCheck::new(lock.clone(), BTreeSet::new()).check(&ctx);
+    let findings = RugPullCheck::new(lock.clone(), BTreeSet::new()).check(&ctx, &[]);
     assert!(findings.is_empty(), "{findings:#?}");
 
     // Present in `observed` with no tools: that really is a removal.
     let observed: BTreeSet<ServerId> = unreachable.iter().map(ServerId::from_manifest).collect();
     assert_eq!(
-        ids(&RugPullCheck::new(lock, observed).check(&ctx)),
+        ids(&RugPullCheck::new(lock, observed).check(&ctx, &[])),
         vec!["MCPWN-RUG-002"]
     );
 }

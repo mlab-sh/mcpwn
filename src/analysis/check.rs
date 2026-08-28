@@ -71,10 +71,16 @@ pub trait ToolCheck: std::fmt::Debug + Send + Sync {
 }
 
 /// A detection that needs to see every tool at once.
+///
+/// Global checks run **after** every [`ToolCheck`], and receive what they
+/// produced as `prior`. That ordering is a guarantee, not an accident: a global
+/// check can build on per-tool conclusions instead of recomputing them — the
+/// toxic-flow check reads the capabilities already found rather than
+/// re-analysing every schema.
 pub trait GlobalCheck: std::fmt::Debug + Send + Sync {
     fn id(&self) -> &'static str;
 
     fn description(&self) -> &'static str;
 
-    fn check(&self, ctx: &ScanContext<'_>) -> Vec<Finding>;
+    fn check(&self, ctx: &ScanContext<'_>, prior: &[Finding]) -> Vec<Finding>;
 }

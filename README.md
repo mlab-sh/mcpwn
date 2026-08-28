@@ -13,9 +13,9 @@ run. Remote servers are asked for their tool list over HTTP, which is a
 read-only request; local stdio servers are reported as not enumerable and left
 alone. All *analysis* is static: mcpwn reads manifests and reasons about them.
 
-> Status: **discovery, enumeration, and capability / obfuscation / rug-pull
-> analysis work.** Three detection families are implemented; the rest are stubs.
-> See [Roadmap](#roadmap).
+> Status: **discovery, enumeration, and capability / obfuscation / rug-pull /
+> toxic-flow analysis work.** Four detection families are implemented; two
+> remain. See [Roadmap](#roadmap).
 
 ## Usage
 
@@ -30,7 +30,8 @@ cargo run -- scan --url https://x/mcp --write-lock    # record the baseline
 cargo run -- scan --url https://x/mcp                # compare against it
 cargo run -- scan --url https://x/mcp --update-lock   # accept the changes
 cargo run -- scan --format sarif        # CI / code scanning
-cargo run -- explain MCPWN-TP-001       # what a rule means
+cargo run -- explain                   # list every rule mcpwn can emit
+cargo run -- explain CAP-001           # what one rule means, in full
 ```
 
 Exit codes: `0` clean, `1` findings reported, `2` error. `discover` never
@@ -391,6 +392,101 @@ Two deliberate choices define what "changed" means:
 Both are pinned by tests: `cosmetic_reformatting_is_not_a_mutation` and
 `an_invisible_character_is_a_mutation`.
 
+### Toxic flows
+
+The first **global** check: it sees every tool of every scanned server at once,
+because no tool here is dangerous alone. The risk appears when three roles
+coexist in one agent's environment:
+
+```
+  ingest   untrusted content enters the context and can steer the model
+     |
+     v
+  source   private state is read
+     |
+     v
+  sink     it leaves
+```
+
+Each server can be entirely legitimate; the environment assembled from them is
+not. The interesting case is a chain that crosses servers — ingest from one,
+source from another, sink from a third — which no per-tool view can see.
+
+#### Role tagging
+
+Roles are **not** decided by a flat keyword list, because the same verb means
+opposite things depending on its object: `read_file` reads private local state
+(source), `read_wiki_contents` pulls in a third party's text (ingest). So the
+table in [roles.rs](src/analysis/roles.rs) is two-dimensional — a verb and an
+object — and the role falls out of the pair:
+
+| | `PRIVATE_OBJECTS` (file, secret, env, inbox, db…) | `EXTERNAL_OBJECTS` (url, page, issue, wiki, docs…) |
+|---|---|---|
+| `INBOUND_VERBS` (read, get, fetch, list…) | **source** | **ingest** |
+| `OUTBOUND_VERBS` (send, post, publish, upload…) | **sink** | **sink** |
+
+Description phrases refine it, and the **capability findings from step 4 are
+consumed, not recomputed**: global checks run after the per-tool pass and
+receive its findings, so `MCPWN-CAP-003` (filesystem) makes a tool a source
+candidate and `MCPWN-CAP-001` (command execution) makes it *both* source and
+sink — a shell is a whole exfiltration by itself.
+
+Capability-derived tags are marked **ambiguous**, name-derived ones **clear**: a
+`file` parameter can name a remote document as easily as a local one, and that
+difference is carried into the finding's severity.
+
+#### The ambiguous network tool
+
+The hard case: a URL parameter can mean a GET that pulls content in (ingest) or
+a POST that pushes data out (sink), and plenty of tools do both. Resolution
+order is an explicit HTTP method in the schema, then the verb in the tool's
+name, then the description. **When none of them settles it, the tool is tagged
+as both, ambiguously** — a missed flow is a scanner that failed, an
+over-reported one is a chain someone checks for a minute. The guess is not
+hidden: it downgrades the finding from Critical to High and is quoted in the
+message.
+
+#### One finding, not N³
+
+With five tools per role there are 125 triples, and all 125 say the same thing:
+*this environment can exfiltrate*. The risk is a property of the environment,
+not of any permutation, so the check emits **at most one finding**
+(`MCPWN-FLOW-001`), carrying a representative chain — the most solid one
+available, clear tags preferred — and listing every tool that can fill each role
+as evidence. The width of the exposure is preserved; the restatements are not.
+
+Severity is Critical when all three links are clear, High when any rests on the
+conservative ambiguous tag. Missing any one role means no finding: source and
+sink with **no ingest** is not a flow, because without untrusted content
+entering, nothing steers the agent into the chain.
+
+The tagging is heuristic — it catches the clear cases and misses contrived ones
+— and the finding says so, in its own evidence.
+
+Checked against the six live public servers: zero flows, individually and
+together. They are read-only documentation servers with no sink, which is the
+right answer and not a vacuous one.
+
+### `mcpwn explain`
+
+A finding in a terminal has room for one sentence; `explain` is where the rest
+lives. `mcpwn explain` with no argument lists all 14 rules with a one-line
+summary; `mcpwn explain <ID>` prints the full page. The `MCPWN-` prefix is
+optional and case does not matter, so `explain cap-001` works.
+
+Each page has four sections: **what it means**, an **example**, **what to do**,
+and — the one that is easiest to skip and most useful — **when it fires on
+something harmless**. A rule whose false positives are undocumented gets ignored
+wholesale, so every entry states its own noise.
+
+The catalogue lives in [explain.rs](src/explain.rs) as data, not prose scattered
+through the checks. Two tests keep it honest: every id a check can emit must be
+documented, and the documented severities must equal the ones the checks
+actually produce. Documentation that silently drifts from the code is worse than
+none, because it is trusted.
+
+`--format json` emits one rule, or the whole catalogue, for tooling.
+
 ### Known limits
 
 * **Only JSON is parsed.** TOML (Codex) and YAML (Continue) files are
@@ -433,10 +529,10 @@ src/
 │   ├── capabilities.rs  IMPLEMENTED: what a tool's parameters let it do
 │   ├── obfuscation.rs   IMPLEMENTED: text humans and models read differently
 │   ├── rugpull.rs       IMPLEMENTED: what changed since the lockfile
+│   ├── roles.rs         IMPLEMENTED: source / ingest / sink tagging
+│   ├── flow.rs          IMPLEMENTED: the ingest -> source -> sink chain (global)
 │   ├── normalize.rs  the reusable normalisation layer (cleaned + report)
 │   ├── schema.rs     JSON Schema flattening (bounded depth, no $ref)
-│   ├── roles.rs      source / ingest / sink tagging
-│   ├── flow.rs       toxic-flow graph and chain walking
 │   └── rules.rs      pattern rules (yara-x seam)
 └── output/
     ├── render.rs     terminal rendering of findings, grouped by severity
@@ -449,6 +545,7 @@ tests/
 ├── discovery.rs          discovery + loading against real files, per-client fixtures
 ├── obfuscation.rs        the normalisation layer and the obfuscation check
 ├── rugpull.rs            the lockfile, server identity, and mutation detection
+├── toxicflow.rs          role tagging, the chain, and the anti-explosion bound
 ├── enumerate.rs          the MCP client, both protocol eras, and the no-execution proof
 └── report_roundtrip.rs   proves the chain compiles and Report round-trips
 ```
@@ -483,8 +580,8 @@ The detection families, one `Category` each. None of them are implemented.
   Still to add: flagging a mutation that *gains* a capability as more than High.
 - ~~**Capability**~~ — **implemented**, see [Capability analysis](#capability-analysis).
   Still to add: credential-shaped parameters, free-form object arguments.
-- **Toxic flows** — `source -> ingest -> sink` chains across every server loaded
-  at once, where each server looks harmless on its own.
+- ~~**Toxic flows**~~ — **implemented**, see [Toxic flows](#toxic-flows).
+  Still to add: richer role signals from tool annotations.
 
 Also queued: an opt-in sandboxed live mode for stdio servers, TOML and YAML
 config parsing, yara-x rule packs, a GitHub Action wrapping the SARIF output,

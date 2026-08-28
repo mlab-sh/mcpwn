@@ -2,6 +2,7 @@
 //!
 //! The engine itself does no I/O; everything that writes bytes lives here.
 
+pub mod explain;
 pub mod inventory;
 pub mod render;
 pub mod sarif;

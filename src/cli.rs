@@ -10,8 +10,11 @@ use owo_colors::OwoColorize;
 
 use mcpwn::analysis::registry::Registry;
 use mcpwn::analysis::rugpull::RugPullCheck;
+use mcpwn::explain;
 use mcpwn::lock::{self, Lock, ServerId, DEFAULT_LOCK_FILE};
-use mcpwn::output::{inventory::InventoryRenderer, render::TerminalRenderer, sarif};
+use mcpwn::output::{
+    explain::ExplainRenderer, inventory::InventoryRenderer, render::TerminalRenderer, sarif,
+};
 use mcpwn::{
     discovery, enumerate, loading, Analyzer, AnalyzerConfig, DiscoveredConfig, EnumeratedServer,
     LoadedConfig, Report, StaticEnumerator,
@@ -39,11 +42,9 @@ pub enum Command {
     Discover(DiscoverArgs),
     /// Scan MCP server configs for dangerous tool definitions.
     Scan(ScanArgs),
-    /// Explain a finding id, e.g. `mcpwn explain MCPWN-TP-001`.
-    Explain {
-        /// The rule id to explain.
-        id: String,
-    },
+    /// Explain a rule id, e.g. `mcpwn explain MCPWN-CAP-001`. Without one,
+    /// lists every rule mcpwn can emit.
+    Explain(ExplainArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -52,6 +53,17 @@ pub struct DiscoverArgs {
     /// the well-known per-user locations are searched instead.
     #[arg(value_name = "PATH")]
     pub paths: Vec<PathBuf>,
+
+    /// Output format.
+    #[arg(short, long, value_enum, default_value_t = InventoryFormat::Terminal)]
+    pub format: InventoryFormat,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ExplainArgs {
+    /// The rule id. The `MCPWN-` prefix is optional and case does not matter.
+    #[arg(value_name = "ID")]
+    pub id: Option<String>,
 
     /// Output format.
     #[arg(short, long, value_enum, default_value_t = InventoryFormat::Terminal)]
@@ -142,7 +154,7 @@ impl Cli {
         match &self.command {
             Command::Discover(args) => self.discover(args),
             Command::Scan(args) => self.scan(args),
-            Command::Explain { id } => Self::explain(id),
+            Command::Explain(args) => self.explain(args),
         }
     }
 
@@ -240,12 +252,6 @@ impl Cli {
                     .color(self.use_color())
                     .verbose(self.verbose)
                     .render(report, out)?;
-                writeln!(
-                    out,
-                    "\nnote: capability, obfuscation and rug-pull analysis; poisoning, \
-                     shadowing and toxic flows are not implemented yet. Tools of stdio servers \
-                     are never enumerated."
-                )?;
             }
             Format::Sarif => writeln!(out, "{}", sarif::to_sarif_string(report)?)?,
             Format::Json => writeln!(out, "{}", report.to_json()?)?,
@@ -253,17 +259,36 @@ impl Cli {
         Ok(())
     }
 
-    fn explain(id: &str) -> Result<i32> {
-        match mcpwn::output::render::explain(id) {
-            Some(text) => {
-                println!("{text}");
-                Ok(exit::CLEAN)
+    fn explain(&self, args: &ExplainArgs) -> Result<i32> {
+        let renderer = ExplainRenderer::new().color(self.use_color());
+        let mut stdout = io::stdout().lock();
+
+        let Some(id) = args.id.as_deref() else {
+            // No id: the catalogue, so the ids are discoverable at all.
+            match args.format {
+                InventoryFormat::Terminal => renderer.render_index(explain::all(), &mut stdout)?,
+                InventoryFormat::Json => {
+                    writeln!(stdout, "{}", serde_json::to_string_pretty(explain::all())?)?
+                }
             }
-            None => {
-                eprintln!("explain: not implemented yet (no entry for `{id}`)");
-                Ok(exit::ERROR)
-            }
+            stdout.flush()?;
+            return Ok(exit::CLEAN);
+        };
+
+        let Some(rule) = explain::lookup(id) else {
+            let known: Vec<&str> = explain::all().iter().map(|r| r.id).collect();
+            anyhow::bail!(
+                "no rule `{id}`. Known rules: {}. Run `mcpwn explain` to list them with a summary.",
+                known.join(", ")
+            );
+        };
+
+        match args.format {
+            InventoryFormat::Terminal => renderer.render(rule, &mut stdout)?,
+            InventoryFormat::Json => writeln!(stdout, "{}", serde_json::to_string_pretty(rule)?)?,
         }
+        stdout.flush()?;
+        Ok(exit::CLEAN)
     }
 
     /// Load the lockfile, if there is a usable one.
