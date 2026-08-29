@@ -7,13 +7,24 @@
 mcpwn reads the tool definitions an MCP server advertises and flags the ones
 that can turn an agent against its user.
 
-It never launches an MCP server.
+Scanning never launches an MCP server and never calls a tool. `mcpwn audit`
+does both, deliberately, and only under an engagement file that names the
+target.
 
 ## Install
 
 ```bash
+brew install mlab-sh/mcpwn/mcpwn
+```
+
+Or from source:
+
+```bash
 cargo install --locked --git https://github.com/mlab-sh/mcpwn
 ```
+
+Prebuilt binaries for macOS and Linux, x86_64 and arm64, are attached to each
+[release](https://github.com/mlab-sh/mcpwn/releases).
 
 ## Usage
 
