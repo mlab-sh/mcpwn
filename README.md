@@ -11,6 +11,17 @@ Scanning never launches an MCP server and never calls a tool. `mcpwn audit`
 does both, deliberately, and only under an engagement file that names the
 target.
 
+## For educational and authorised use only
+
+mcpwn is published for security research, education, and testing systems you are
+entitled to test.
+
+`discover`, `view` and `scan` only read. `mcpwn audit` launches processes and
+calls tools on a live server, which **acts on it**: it creates, sends, writes and
+spends whatever the tools it is allowed to call do. Point it only at systems you
+own or have written permission to assess. Having that permission is your
+responsibility, and so is what you do with the results.
+
 ## Install
 
 ```bash

@@ -180,6 +180,10 @@ impl Engagement {
 /// A starter engagement file, printed by `mcpwn audit init`.
 pub const TEMPLATE: &str = r#"# mcpwn audit engagement.
 #
+# For educational and authorised use only. Running this calls tools on the
+# target, which acts on it. Point it only at systems you own or have written
+# permission to assess.
+#
 # This file is the only way to run an audit. It names one target, the tools that
 # may be called on it, and who authorised it. There is no --url and no config
 # discovery: one command must never be able to reach every server on a machine.

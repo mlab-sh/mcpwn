@@ -3,6 +3,9 @@
 `mcpwn audit` is the only command that launches a process and the only one that
 calls a tool. Everything else reads.
 
+**For educational and authorised use only.** Point it at systems you own or have
+written permission to assess. Having that permission is your responsibility.
+
 That distinction is not cosmetic. Calling a tool means acting on the target: it
 creates, sends, writes and spends whatever the tools it is allowed to call
 create, send, write and spend. Pointing it at somebody else's server is not

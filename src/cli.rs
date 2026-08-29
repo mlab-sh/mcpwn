@@ -59,6 +59,9 @@ pub enum Command {
     InitPolicy,
     /// Actively test one server under an engagement. Unlike every other
     /// command, this calls tools, which means it acts on the target.
+    ///
+    /// For authorised testing only: point it at systems you own or have written
+    /// permission to assess.
     Audit(audit::AuditArgs),
 }
 

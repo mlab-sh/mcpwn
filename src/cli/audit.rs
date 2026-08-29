@@ -134,6 +134,9 @@ fn execute(cli: &Cli, args: &RunArgs) -> Result<i32> {
             .unwrap_or_default()
     ));
     eprintln!("  tools in scope: {}", engagement.tools.allow.join(", "));
+    // Printed on every run, not buried in a manual: whoever is watching this
+    // scroll past should be reminded what it is about to do, and on whose word.
+    cli.warn("for authorised testing only: this calls tools on the target");
 
     let timeout = Duration::from_secs(engagement.limits.timeout_seconds);
     let mut caller: Box<dyn ToolCaller> = if engagement.is_stdio() {
