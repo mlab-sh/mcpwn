@@ -136,8 +136,8 @@ The GitHub Action wraps all of it:
     fail-on: high
 ```
 
-See [`.github/workflows/mcpwn-example.yml`](.github/workflows/mcpwn-example.yml)
-for a complete workflow.
+See [the action documentation](docs/github-action.md) for a complete workflow
+and the full list of inputs.
 
 ## mcpwn audit
 
@@ -207,6 +207,13 @@ discovered and listed, but reported as not yet parseable.
 * Tool poisoning detection is not implemented yet.
 * `mcpwn audit` never runs without an engagement file, and never calls a tool
   the engagement did not name.
+
+## Documentation
+
+* [How MCP works](docs/mcp.md), with sources
+* [How the static checks work](docs/detection.md)
+* [How the active audit works](docs/audit.md)
+* [Using mcpwn in GitHub Actions](docs/github-action.md)
 
 ## Development
 
