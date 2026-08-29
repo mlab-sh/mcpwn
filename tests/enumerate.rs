@@ -667,6 +667,9 @@ fn bad_headers_are_rejected_and_never_echo_the_value() {
 
 // --- THE safety guarantee ---------------------------------------------------
 
+// Unix only: the witness command is a shell one, and the guarantee it proves is
+// the same on every platform.
+#[cfg(unix)]
 #[test]
 fn stdio_server_is_never_executed() {
     let tmp = TempDir::new("no-exec");

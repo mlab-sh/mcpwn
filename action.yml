@@ -48,29 +48,52 @@ runs:
       id: scan
       shell: bash
       run: |
-        set -o pipefail
-        args=("${{ inputs.path }}" --format sarif)
-        [ -n "${{ inputs.policy }}" ] && args+=(--policy "${{ inputs.policy }}")
-        [ -n "${{ inputs.lock }}" ]   && args+=(--lock "${{ inputs.lock }}")
-        args+=(--fail-on "${{ inputs.fail-on }}")
+        set -euo pipefail
 
-        # SARIF goes to the file; the exit code is captured, not swallowed, so
-        # the upload still happens on a failing scan.
+        # Built once, then reused for both the SARIF and the log summary. A
+        # named policy or lock that does not exist is an error in mcpwn, on
+        # purpose, so an input pointing at a missing file is simply not passed.
+        args=("${{ inputs.path }}" --fail-on "${{ inputs.fail-on }}")
+        if [ -n "${{ inputs.policy }}" ]; then
+          if [ -f "${{ inputs.policy }}" ]; then
+            args+=(--policy "${{ inputs.policy }}")
+          else
+            echo "::notice::no policy at ${{ inputs.policy }}, continuing without one"
+          fi
+        fi
+        if [ -n "${{ inputs.lock }}" ]; then
+          if [ -f "${{ inputs.lock }}" ]; then
+            args+=(--lock "${{ inputs.lock }}")
+          else
+            echo "::notice::no lockfile at ${{ inputs.lock }}, rug-pull detection is skipped"
+          fi
+        fi
+
+        # The exit code is captured rather than swallowed, so the upload still
+        # happens when the scan reports findings.
         set +e
-        mcpwn scan "${args[@]}" > "${{ inputs.sarif-file }}"
+        mcpwn scan "${args[@]}" --format sarif > "${{ inputs.sarif-file }}"
         code=$?
         set -e
 
-        findings=$(python3 -c "import json,sys;print(len(json.load(open('${{ inputs.sarif-file }}'))['runs'][0]['results']))" 2>/dev/null || echo 0)
-        echo "sarif-file=${{ inputs.sarif-file }}" >> "$GITHUB_OUTPUT"
-        echo "findings=$findings" >> "$GITHUB_OUTPUT"
-        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        findings=0
+        if jq -e . "${{ inputs.sarif-file }}" >/dev/null 2>&1; then
+          findings=$(jq '.runs[0].results | length' "${{ inputs.sarif-file }}")
+        else
+          echo "::error::mcpwn did not produce valid SARIF; see the summary below"
+        fi
+
+        {
+          echo "sarif-file=${{ inputs.sarif-file }}"
+          echo "findings=$findings"
+          echo "exit-code=$code"
+        } >> "$GITHUB_OUTPUT"
 
         # Human-readable summary in the job log, whatever the outcome.
-        mcpwn scan "${args[@]/--format sarif/}" --no-color || true
+        mcpwn scan "${args[@]}" --no-color || true
 
     - name: Upload SARIF
-      if: ${{ inputs.upload-sarif == 'true' && always() }}
+      if: ${{ always() && inputs.upload-sarif == 'true' && steps.scan.outputs.findings != '' }}
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: ${{ steps.scan.outputs.sarif-file }}
