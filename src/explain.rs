@@ -817,6 +817,116 @@ better than a denylist of addresses.",
 Low, and a hit is checked against a control. A server deliberately proxying the \
 metadata service is a finding either way.",
     },
+    RuleDoc {
+        id: "MCPWN-ACT-005",
+        title: "A session identifier chosen by the client is accepted",
+        category: Category::Vulnerability,
+        severity: Severity::Medium,
+        check: "audit:session-fixation",
+        summary: "A server that mints session identifiers also adopts one it never issued.",
+        detail: "\
+The endpoint issues its own `Mcp-Session-Id` on `initialize`, so it is running \
+the session-based transport, and it also accepted an identifier this scan \
+invented.
+
+A session the server did not issue is one it cannot reason about. Anyone able to \
+put a value in front of a victim's client decides which session that client ends \
+up in, and can then be in it too.
+
+Not reported for a stateless server: revision 2026-07-28 removed sessions \
+entirely, so ignoring the header is correct there and flagging it would fire on \
+every modern server.
+
+Produced only by `mcpwn audit`, under an engagement.",
+        example: None,
+        remediation: "Reject any session identifier the server did not issue, rather than adopting it.",
+        expected_noise: "\
+Low. It takes a server that both mints sessions and accepts foreign ones, which \
+is a specific combination.",
+    },
+    RuleDoc {
+        id: "MCPWN-ACT-006",
+        title: "A carriage return in a header value is carried through",
+        category: Category::Vulnerability,
+        severity: Severity::High,
+        check: "audit:header-injection",
+        summary: "A header value containing CRLF smuggles a header of its own.",
+        detail: "\
+A header sent to the target contained a carriage return, and the header it \
+smuggled came back in the response. Something on the path rebuilds requests \
+without validating them, so any value that reaches a header can add headers of \
+its own.
+
+That matters because the transport deliberately mirrors body fields into \
+headers for gateways to route on. Where a gateway and the server read different \
+requests out of the same bytes, one can authorise what the other executes.
+
+**Plaintext targets only.** Sending this needs the request written by hand over \
+a socket, since no HTTP library will carry a control character in a header, \
+which is correct of them. Over TLS that would mean driving the TLS stack \
+directly, and an `https://` target is reported as not covered rather than \
+quietly skipped.
+
+Produced only by `mcpwn audit`, under an engagement.",
+        example: Some("X-Probe: probe\\r\\nX-Mcpwn-abc: injected  comes back as a response header"),
+        remediation: "\
+Reject control characters in header values at the edge, and do not rebuild \
+requests from unvalidated parts.",
+        expected_noise: "None expected: the marker is per-run and has to survive a round trip.",
+    },
+    RuleDoc {
+        id: "MCPWN-ACT-007",
+        title: "The server stopped answering after a malformed message",
+        category: Category::Vulnerability,
+        severity: Severity::High,
+        check: "audit:protocol-fuzz",
+        summary: "A malformed JSON-RPC message ended the process.",
+        detail: "\
+One of the malformed messages the fuzz probe sends left the target unable to \
+answer. A request any caller can send should produce an error, not the end of \
+the process, so anyone who can reach this endpoint can stop it.
+
+The probe stops as soon as this happens: there is nothing further to learn from \
+a server that is no longer there.
+
+Bounded on purpose. Nesting goes to 200 levels and the oversized case to 64 KiB, \
+enough to find a parser with no limit and far short of being the outage it is \
+looking for.
+
+**Gated.** This is the only probe that can take a target down, so it runs only \
+when an engagement names `protocol-fuzz` explicitly.
+
+Produced only by `mcpwn audit`, under an engagement.",
+        example: Some("A truncated object, or params nested 200 deep, and the process is gone"),
+        remediation: "Handle parse failures as JSON-RPC errors rather than letting them escape.",
+        expected_noise: "None: either the server answers afterwards or it does not.",
+    },
+    RuleDoc {
+        id: "MCPWN-ACT-008",
+        title: "An internal detail escapes in an error",
+        category: Category::Vulnerability,
+        severity: Severity::Medium,
+        check: "audit:protocol-fuzz",
+        summary: "A malformed message produced what looks like a stack trace.",
+        detail: "\
+The answer to a malformed message carried a stack trace signature: a Python \
+traceback, a Java frame, a Rust panic, a path through `node_modules`.
+
+That hands a caller file paths, library versions and internal structure, none of \
+which is theirs to have. It is also usually a sign the error reached the \
+transport rather than being handled, which is the more interesting half.
+
+**Gated** with the rest of `protocol-fuzz`.
+
+Produced only by `mcpwn audit`, under an engagement.",
+        example: Some("An error body containing \"Traceback (most recent call last)\""),
+        remediation: "\
+Return a JSON-RPC error with a message written for a caller, and log the detail \
+server-side.",
+        expected_noise: "\
+A development server with debug output on will fire. That is worth knowing if it \
+is the one you are about to ship.",
+    },
     // --- toxic flow ---------------------------------------------------------
     RuleDoc {
         id: "MCPWN-FLOW-001",

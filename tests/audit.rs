@@ -405,3 +405,288 @@ fn optional_parameters_are_left_out() {
     assert_eq!(arguments["path"], "PAYLOAD");
     assert!(arguments.get("recursive").is_none(), "{arguments}");
 }
+
+// --- the HTTP transport -----------------------------------------------------
+//
+// Everything above goes through stdio. These exercise the HTTP path, which
+// carries the dual-era negotiation and the session handling and had no test at
+// all until it started being leaned on by the transport probes.
+
+use common::{http_response, json_200, spawn_mock_req, MockRequest};
+
+const HTTP_TOOLS: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[
+  {"name":"read_file","description":"Reads a file.",
+   "inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]}}"#;
+
+/// Write an engagement pointing at an HTTP endpoint.
+fn http_engagement(tmp: &TempDir, url: &str, extra: &str) -> String {
+    tmp.write(
+        "engagement.toml",
+        &format!(
+            r#"target = "{url}"
+authorized_by = "tests@example.com"
+
+[limits]
+rate_per_second = 50
+max_requests = 100
+timeout_seconds = 10
+
+[tools]
+allow = ["read_file"]
+{extra}
+"#
+        ),
+    )
+    .display()
+    .to_string()
+}
+
+#[test]
+fn an_http_target_is_audited_end_to_end() {
+    let url = spawn_mock_req(|request: MockRequest| {
+        if !request.body.contains("tools/call") {
+            return json_200(HTTP_TOOLS);
+        }
+        // Vulnerable to traversal, like the stdio fixture.
+        let text = if request.body.contains("etc/passwd") {
+            "root:x:0:0:root:/root:/bin/bash"
+        } else {
+            "not found"
+        };
+        json_200(&format!(
+            r#"{{"jsonrpc":"2.0","id":2,"result":{{"content":[{{"type":"text","text":"{text}"}}]}}}}"#
+        ))
+    });
+    let tmp = TempDir::new("audit-http");
+    let path = http_engagement(&tmp, &url, "");
+
+    let output = audit(&[
+        "run",
+        "-e",
+        &path,
+        "--transcript",
+        &tmp.path().join("t.jsonl").display().to_string(),
+        "--no-color",
+    ]);
+
+    assert!(
+        stdout(&output).contains("MCPWN-ACT-001"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(output.status.code(), Some(1));
+}
+
+#[test]
+fn an_http_target_falls_back_to_the_handshake() {
+    // A legacy server: it refuses the stateless call and mints a session.
+    let url = spawn_mock_req(|request: MockRequest| {
+        if request
+            .body
+            .contains("io.modelcontextprotocol/protocolVersion")
+        {
+            return http_response(
+                400,
+                "Bad Request",
+                "application/json",
+                r#"{"jsonrpc":"2.0","error":{"code":-32000,"message":"session required"},"id":null}"#,
+            );
+        }
+        if request.body.contains("\"initialize\"") {
+            return http_response(200, "OK", "application/json",
+                r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{}}}"#)
+                .replace("content-type:", "mcp-session-id: srv-1\r\ncontent-type:");
+        }
+        json_200(HTTP_TOOLS)
+    });
+    let tmp = TempDir::new("audit-http-legacy");
+    let path = http_engagement(&tmp, &url, r#"probes = ["path-traversal"]"#);
+
+    let output = audit(&[
+        "run",
+        "-e",
+        &path,
+        "--transcript",
+        &tmp.path().join("t.jsonl").display().to_string(),
+        "--no-color",
+    ]);
+
+    // The point is that it got through the handshake and enumerated at all.
+    assert!(
+        stderr(&output).contains("1 tool(s) advertised"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+// --- the transport probes ---------------------------------------------------
+
+#[test]
+fn a_session_the_server_never_issued_is_reported() {
+    let url = spawn_mock_req(|request: MockRequest| {
+        if request
+            .body
+            .contains("io.modelcontextprotocol/protocolVersion")
+        {
+            return http_response(400, "Bad Request", "text/plain", "");
+        }
+        if request.body.contains("\"initialize\"") {
+            // Mints a session, and would accept any other.
+            return http_response(200, "OK", "application/json",
+                r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{}}}"#)
+                .replace("content-type:", "mcp-session-id: srv-1\r\ncontent-type:");
+        }
+        json_200(HTTP_TOOLS)
+    });
+    let tmp = TempDir::new("audit-session");
+    let path = http_engagement(&tmp, &url, r#"probes = ["session-fixation"]"#);
+
+    let output = audit(&[
+        "run",
+        "-e",
+        &path,
+        "--transcript",
+        &tmp.path().join("t.jsonl").display().to_string(),
+        "--no-color",
+    ]);
+
+    assert!(
+        stdout(&output).contains("MCPWN-ACT-005"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_stateless_server_is_not_a_session_fixation_finding() {
+    // Revision 2026-07-28 removed sessions. Ignoring the header is correct
+    // there, and reporting it would fire on every modern server.
+    let url = spawn_mock_req(|_| json_200(HTTP_TOOLS));
+    let tmp = TempDir::new("audit-session-modern");
+    let path = http_engagement(&tmp, &url, r#"probes = ["session-fixation"]"#);
+
+    let output = audit(&[
+        "run",
+        "-e",
+        &path,
+        "--transcript",
+        &tmp.path().join("t.jsonl").display().to_string(),
+        "--no-color",
+    ]);
+
+    assert!(
+        !stdout(&output).contains("MCPWN-ACT-005"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_carriage_return_carried_through_a_header_is_reported() {
+    // The mock echoes any header it was given whose name starts with x-mcpwn,
+    // which is exactly what a proxy rebuilding requests would do.
+    let url = spawn_mock_req(|request: MockRequest| {
+        let injected: Vec<&str> = request
+            .headers
+            .lines()
+            .filter_map(|line| line.split(':').next())
+            .filter(|name| name.to_lowercase().starts_with("x-mcpwn-"))
+            .collect();
+        let body = HTTP_TOOLS;
+        let mut extra = String::new();
+        for name in injected {
+            extra.push_str(&format!("{name}: echoed\r\n"));
+        }
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n{extra}content-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    });
+    let tmp = TempDir::new("audit-crlf");
+    let path = http_engagement(&tmp, &url, r#"probes = ["header-injection"]"#);
+
+    let output = audit(&[
+        "run",
+        "-e",
+        &path,
+        "--transcript",
+        &tmp.path().join("t.jsonl").display().to_string(),
+        "--no-color",
+    ]);
+
+    assert!(
+        stdout(&output).contains("MCPWN-ACT-006"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_header_that_is_not_carried_through_is_not_reported() {
+    let url = spawn_mock_req(|_| json_200(HTTP_TOOLS));
+    let tmp = TempDir::new("audit-crlf-clean");
+    let path = http_engagement(&tmp, &url, r#"probes = ["header-injection"]"#);
+
+    let output = audit(&[
+        "run",
+        "-e",
+        &path,
+        "--transcript",
+        &tmp.path().join("t.jsonl").display().to_string(),
+        "--no-color",
+    ]);
+
+    assert!(
+        !stdout(&output).contains("MCPWN-ACT-006"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+// --- the gate on the one probe that can break something ---------------------
+
+#[test]
+fn the_fuzz_probe_does_not_run_unless_it_is_named() {
+    let tmp = TempDir::new("audit-fuzz-gate");
+    let path = engagement_for(&tmp, r#"["read_file"]"#, "");
+    let transcript = tmp.path().join("t.jsonl");
+
+    audit(&[
+        "run",
+        "-e",
+        &path,
+        "--transcript",
+        &transcript.display().to_string(),
+        "--no-color",
+    ]);
+
+    let log = std::fs::read_to_string(&transcript).expect("transcript");
+    assert!(
+        !log.contains("protocol-fuzz"),
+        "the only probe that can take a target down must be asked for by name"
+    );
+}
+
+#[test]
+fn the_fuzz_probe_runs_when_it_is_named() {
+    let tmp = TempDir::new("audit-fuzz-on");
+    let path = engagement_for(&tmp, r#"["read_file"]"#, r#"probes = ["protocol-fuzz"]"#);
+    let transcript = tmp.path().join("t.jsonl");
+
+    audit(&[
+        "run",
+        "-e",
+        &path,
+        "--transcript",
+        &transcript.display().to_string(),
+        "--no-color",
+    ]);
+
+    let log = std::fs::read_to_string(&transcript).expect("transcript");
+    assert!(log.contains("protocol-fuzz"), "{log}");
+    // Bounded: the nesting case stops at 200 levels, not at whatever it takes.
+    assert!(
+        !log.contains(&"a".repeat(500)),
+        "an unbounded payload was sent"
+    );
+}

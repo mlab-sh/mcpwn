@@ -81,8 +81,14 @@ pub fn run(cli: &Cli, args: &AuditArgs) -> Result<i32> {
             Ok(exit::CLEAN)
         }
         Action::Probes => {
+            println!("per parameter:");
             for probe in PROBES {
                 println!("  {:<20}  {}", probe.id, probe.description);
+            }
+            println!("\nper target:");
+            for (id, description, gated) in probes::TRANSPORT_PROBES {
+                let mark = if *gated { " [gated]" } else { "" };
+                println!("  {id:<20}  {description}{mark}");
             }
             Ok(exit::CLEAN)
         }
@@ -154,7 +160,12 @@ fn execute(cli: &Cli, args: &RunArgs) -> Result<i32> {
     }
 
     let allowed = engagement.allowed_probes();
-    let enabled = |id: &str| allowed.as_ref().is_none_or(|set| set.contains(id));
+    // A gated probe never runs by default: `protocol-fuzz` is the only thing
+    // here that can take a target down, so it has to be asked for by name.
+    let enabled = |id: &str| match allowed.as_ref() {
+        Some(set) => set.contains(id),
+        None => !probes::is_gated(id),
+    };
 
     if args.dry_run {
         return plan(&in_scope, &enabled);
@@ -227,6 +238,34 @@ fn execute(cli: &Cli, args: &RunArgs) -> Result<i32> {
         }
     }
 
+    if stopped.is_none() {
+        let mut spend = |exchange: &probes::Exchange| -> std::result::Result<(), String> {
+            budget.take()?;
+            transcript
+                .write(json!({
+                    "kind": "call",
+                    "tool": exchange.tool,
+                    "parameter": exchange.param,
+                    "probe": exchange.probe,
+                    "payload": exchange.payload,
+                    "outcome": match &exchange.outcome {
+                        Ok(outcome) => json!({
+                            "ok": true,
+                            "is_error": outcome.is_error,
+                            "duration_ms": outcome.duration.as_millis() as u64,
+                            "response": outcome.raw,
+                        }),
+                        Err(err) => json!({ "ok": false, "error": err }),
+                    },
+                }))
+                .map_err(|err| err.to_string())
+        };
+        match probes::run_transport(caller.as_mut(), &engagement, &enabled, &nonce, &mut spend) {
+            Ok(found) => findings.extend(found),
+            Err(err) => stopped = Some(err),
+        }
+    }
+
     let mut meta = ScanMeta::new(Some(engagement.target.clone()));
     meta.servers = 1;
     meta.tools = in_scope.len();
@@ -262,6 +301,21 @@ fn execute(cli: &Cli, args: &RunArgs) -> Result<i32> {
 /// Show the plan without sending anything.
 fn plan(tools: &[ToolManifest], enabled: &dyn Fn(&str) -> bool) -> Result<i32> {
     println!("dry run: nothing is sent");
+
+    let transport: Vec<&str> = probes::TRANSPORT_PROBES
+        .iter()
+        .filter(|(id, _, _)| enabled(id))
+        .map(|(id, _, _)| *id)
+        .collect();
+    println!(
+        "\n  (transport)\n    {}",
+        if transport.is_empty() {
+            "no transport probe enabled".to_owned()
+        } else {
+            transport.join(", ")
+        }
+    );
+
     for tool in tools {
         println!("\n  {}", tool.name);
         if let Some(reason) = dangerous(tool) {

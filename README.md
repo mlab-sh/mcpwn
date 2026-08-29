@@ -61,7 +61,7 @@ Exit codes: `0` clean, `1` findings at or above the threshold, `2` error.
 
 ## What it detects
 
-32 rules. `mcpwn explain` lists them all; `mcpwn explain <ID>` gives the detail.
+36 rules. `mcpwn explain` lists them all; `mcpwn explain <ID>` gives the detail.
 
 | Family | Rules | What |
 |---|---|---|
@@ -72,7 +72,7 @@ Exit codes: `0` clean, `1` findings at or above the threshold, `2` error.
 | Shadowing | `MCPWN-SHA-001..003` | Colliding tool names, look-alike names, a server giving instructions about another server's tool |
 | Toxic flow | `MCPWN-FLOW-001` | An ingest, a source and a sink coexisting in one environment |
 | Reconnaissance | `MCPWN-NET-001..006` | Needs `--probe`: unenforced credentials, missing auth discovery, deprecated transport, plaintext downgrade, unvalidated protocol and headers |
-| Confirmed defects | `MCPWN-ACT-001..004` | `mcpwn audit` only: path traversal, command injection, SQL injection, SSRF |
+| Confirmed defects | `MCPWN-ACT-001..008` | `mcpwn audit` only: path traversal, command injection, SQL injection, SSRF, session fixation, header injection, crash and error leaks under malformed input |
 
 ## Probing an endpoint
 
@@ -167,12 +167,18 @@ allow = ["read_file", "fetch_url"]   # nothing else is called
 allow_dangerous = false              # tools that take a command line
 ```
 
-Four probes: path traversal, command injection, SQL injection, SSRF to the cloud
-metadata service. Each poisons one parameter and looks for a specific oracle.
+Seven probes. Four poison one parameter of one tool: path traversal, command
+injection, SQL injection, SSRF to the cloud metadata service. Three test the
+transport itself: session fixation, header injection, and malformed JSON-RPC.
+`mcpwn audit probes` lists them; each looks for a specific oracle.
 
 * Nothing destructive is sent. `; echo` yes, `; rm` never.
 * Every hit is re-checked against a control call that must come back clean.
 * Tools that take a command line are skipped unless `allow_dangerous` is set.
+* `protocol-fuzz` is the only probe that can take a target down, so it runs only
+  when an engagement names it. Nesting stops at 200 levels and payloads at 64 KiB.
+* Header injection needs the request written by hand over a socket, so it covers
+  `http://` targets only. An `https://` one is reported as not covered.
 * Every request and response is written to a JSONL transcript as it happens.
 
 A `stdio:` target launches the server, with no shell, a minimal environment, a

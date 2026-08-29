@@ -11,7 +11,8 @@
 pub mod budget;
 pub mod caller;
 pub mod probes;
+pub mod rawhttp;
 pub mod stdio;
 
 pub use budget::{Budget, Transcript};
-pub use caller::{CallOutcome, HttpCaller, StdioCaller, ToolCaller};
+pub use caller::{CallOutcome, HttpCaller, RawResponse, StdioCaller, ToolCaller};

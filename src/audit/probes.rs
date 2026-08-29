@@ -481,3 +481,390 @@ fn filler(schema: &Value, payload: Option<&str>) -> Value {
         _ => Value::Null,
     }
 }
+
+// ---------------------------------------------------------------------------
+// Transport-level probes
+//
+// The probes above poison one parameter of one tool. These three test the
+// transport itself, so they run once per target rather than once per parameter.
+//
+// `protocol-fuzz` is **gated**: it is the only probe here that can take a
+// target down, so it runs only when an engagement names it explicitly. The
+// others run by default.
+// ---------------------------------------------------------------------------
+
+use crate::audit::caller::RawResponse;
+use crate::audit::rawhttp;
+use crate::engagement::Engagement;
+
+/// Probes that operate on the transport rather than on a tool.
+pub const TRANSPORT_PROBES: &[(&str, &str, bool)] = &[
+    (
+        "session-fixation",
+        "Accepts a session identifier chosen by the client.",
+        false,
+    ),
+    (
+        "header-injection",
+        "Carries a carriage return in a header value (plaintext targets only).",
+        false,
+    ),
+    (
+        "protocol-fuzz",
+        "Malformed JSON-RPC, to see what the server does with it. Gated: name it explicitly.",
+        true,
+    ),
+];
+
+/// Whether a transport probe only runs when an engagement names it.
+pub fn is_gated(id: &str) -> bool {
+    TRANSPORT_PROBES
+        .iter()
+        .any(|(probe, _, gated)| *probe == id && *gated)
+}
+
+/// Signatures of an internal detail escaping in an error message.
+const LEAK_SIGNATURES: &[&str] = &[
+    "traceback (most recent call last)",
+    "at java.",
+    "exception in thread",
+    "panicked at",
+    "node_modules/",
+    "goroutine ",
+    "stack trace:",
+    "system.exception",
+    "/usr/lib/python",
+    "site-packages/",
+];
+
+/// Malformed messages, each testing one assumption a parser might make.
+fn fuzz_cases(nonce: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("not json at all", format!("this is not json {nonce}")),
+        (
+            "truncated object",
+            "{\"jsonrpc\": \"2.0\", \"id\":".to_owned(),
+        ),
+        (
+            "no jsonrpc field",
+            json!({ "id": 1, "method": "tools/list", "params": {} }).to_string(),
+        ),
+        (
+            "method is a number",
+            json!({ "jsonrpc": "2.0", "id": 1, "method": 42, "params": {} }).to_string(),
+        ),
+        (
+            "params is a string",
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": "nope" })
+                .to_string(),
+        ),
+        (
+            "id is an object",
+            json!({ "jsonrpc": "2.0", "id": {"a": 1}, "method": "tools/list", "params": {} })
+                .to_string(),
+        ),
+        (
+            "unknown method",
+            json!({ "jsonrpc": "2.0", "id": 1, "method": format!("mcpwn/{nonce}"), "params": {} })
+                .to_string(),
+        ),
+        (
+            "batch array",
+            json!([{ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {} }])
+                .to_string(),
+        ),
+        ("deeply nested params", deep_nesting(200)),
+        ("oversized string", oversized(64 * 1024)),
+    ]
+}
+
+/// 200 levels, not unbounded: the point is to find a recursive parser with no
+/// depth limit, not to exhaust the machine.
+fn deep_nesting(depth: usize) -> String {
+    let mut inner = json!(1);
+    for _ in 0..depth {
+        inner = json!({ "a": inner });
+    }
+    json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": inner }).to_string()
+}
+
+/// 64 KiB, not megabytes: enough to find a missing length check, small enough
+/// not to be the outage it is looking for.
+fn oversized(size: usize) -> String {
+    json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list",
+            "params": { "cursor": "A".repeat(size) } })
+    .to_string()
+}
+
+/// Run the transport-level probes once against the target.
+pub fn run_transport(
+    caller: &mut dyn ToolCaller,
+    engagement: &Engagement,
+    enabled: &dyn Fn(&str) -> bool,
+    nonce: &str,
+    spend: &mut dyn FnMut(&Exchange) -> Result<(), String>,
+) -> Result<Vec<Finding>, String> {
+    let mut findings = Vec::new();
+    let target = caller.target();
+
+    if enabled("session-fixation") {
+        if let Some(finding) = session_fixation(caller, engagement, nonce, spend)? {
+            findings.push(finding);
+        }
+    }
+    if enabled("header-injection") {
+        if let Some(finding) = header_injection(caller, &target, nonce, spend)? {
+            findings.push(finding);
+        }
+    }
+    if enabled("protocol-fuzz") {
+        findings.extend(protocol_fuzz(caller, &target, nonce, spend)?);
+    }
+    Ok(findings)
+}
+
+/// Record one transport exchange against the budget and the transcript.
+fn record(
+    probe: &'static str,
+    payload: &str,
+    outcome: &Result<RawResponse, String>,
+    spend: &mut dyn FnMut(&Exchange) -> Result<(), String>,
+) -> Result<(), String> {
+    let exchange = Exchange {
+        tool: "(transport)".to_owned(),
+        param: String::new(),
+        probe,
+        payload: payload.chars().take(200).collect(),
+        outcome: outcome
+            .as_ref()
+            .map(|raw| CallOutcome {
+                text: raw.body.clone(),
+                raw: json!({ "status": raw.status, "headers": raw.headers, "body": raw.body }),
+                is_error: raw.status.is_some_and(|s| s >= 400),
+                duration: raw.duration,
+            })
+            .map_err(|err| err.clone()),
+    };
+    spend(&exchange)
+}
+
+/// A session identifier the client chose, accepted by a server that mints its
+/// own.
+///
+/// Only meaningful on a server that actually uses sessions. A stateless one
+/// ignores the header entirely, and reporting that would fire on every modern
+/// server.
+fn session_fixation(
+    caller: &mut dyn ToolCaller,
+    engagement: &Engagement,
+    nonce: &str,
+    spend: &mut dyn FnMut(&Exchange) -> Result<(), String>,
+) -> Result<Option<Finding>, String> {
+    let Some(url) = caller.endpoint().map(str::to_owned) else {
+        return Ok(None); // stdio has no sessions.
+    };
+    let timeout = std::time::Duration::from_secs(engagement.limits.timeout_seconds);
+    let headers = crate::enumerate::parse_headers(&engagement.headers).unwrap_or_default();
+
+    // Does this server use sessions at all?
+    let mut probe_caller = crate::audit::caller::HttpCaller::new(&url, headers.clone(), timeout);
+    let _ = probe_caller.list_tools();
+    if probe_caller.session().is_none() {
+        return Ok(None); // stateless: nothing to fix.
+    }
+
+    // Now claim one it never issued.
+    let chosen = format!("mcpwn-{nonce}");
+    let mut forged = headers.clone();
+    forged.push(("mcp-session-id".to_owned(), chosen.clone()));
+    let mut forged_caller = crate::audit::caller::HttpCaller::new(&url, forged, timeout);
+    let outcome = forged_caller.list_tools().map(|tools| RawResponse {
+        status: Some(200),
+        headers: String::new(),
+        body: format!("{} tool(s)", tools.len()),
+        duration: std::time::Duration::ZERO,
+    });
+    record("session-fixation", &chosen, &outcome, spend)?;
+
+    let Ok(response) = outcome else {
+        return Ok(None);
+    };
+
+    Ok(Some(
+        Finding::builder(
+            "MCPWN-ACT-005",
+            Category::Vulnerability,
+            Severity::Medium,
+            "A session identifier chosen by the client is accepted",
+        )
+        .message(format!(
+            "`{}` mints its own session identifiers, and also accepted one this scan invented. A \
+             session the server did not issue is a session it cannot reason about: anyone able to \
+             put a value in front of a victim's client can decide which session that client ends \
+             up in, which is session fixation.",
+            caller.target()
+        ))
+        .confidence(Confidence::High)
+        .remediation(
+            "Reject any session identifier the server did not issue, rather than adopting it.",
+        )
+        .evidence(Evidence::new("forged session", chosen))
+        .evidence(Evidence::new("result", response.body))
+        .build(),
+    ))
+}
+
+/// A carriage return smuggled into a header value.
+fn header_injection(
+    caller: &mut dyn ToolCaller,
+    target: &str,
+    nonce: &str,
+    spend: &mut dyn FnMut(&Exchange) -> Result<(), String>,
+) -> Result<Option<Finding>, String> {
+    let Some(url) = caller.endpoint() else {
+        return Ok(None); // no headers on stdio.
+    };
+    if !rawhttp::is_plaintext(url) {
+        // Said, not silently skipped: a probe that does nothing quietly is
+        // worse than one that reports it did not run.
+        return Ok(None);
+    }
+
+    let marker = format!("X-Mcpwn-{nonce}");
+    let value = format!("probe\r\n{marker}: injected");
+    let body =
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {} }).to_string();
+    let outcome = rawhttp::post_raw_headers(
+        url,
+        &[("X-Mcpwn-Probe".to_owned(), value.clone())],
+        &body,
+        std::time::Duration::from_secs(10),
+    );
+    record("header-injection", &value, &outcome, spend)?;
+
+    let Ok(response) = outcome else {
+        return Ok(None);
+    };
+    // The signal is the injected header coming back in the *response* headers:
+    // that is the request having been split and rebuilt somewhere along the way.
+    if !response
+        .headers
+        .to_lowercase()
+        .contains(&marker.to_lowercase())
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(
+        Finding::builder(
+            "MCPWN-ACT-006",
+            Category::Vulnerability,
+            Severity::High,
+            "A carriage return in a header value is carried through",
+        )
+        .message(format!(
+            "A header sent to `{target}` contained a carriage return, and the header it smuggled \
+             came back in the response. Something on the path is rebuilding requests without \
+             validating them, so a value that reaches a header can add headers of its own. Where \
+             a gateway and the server then read different requests out of the same bytes, one can \
+             authorise what the other executes."
+        ))
+        .confidence(Confidence::High)
+        .remediation(
+            "Reject control characters in header values at the edge, and do not rebuild requests \
+             from unvalidated parts.",
+        )
+        .evidence(Evidence::new("injected header", marker))
+        .evidence(Evidence::new(
+            "response headers",
+            response.headers.chars().take(400).collect::<String>(),
+        ))
+        .build(),
+    ))
+}
+
+/// Malformed JSON-RPC, one assumption at a time.
+fn protocol_fuzz(
+    caller: &mut dyn ToolCaller,
+    target: &str,
+    nonce: &str,
+    spend: &mut dyn FnMut(&Exchange) -> Result<(), String>,
+) -> Result<Vec<Finding>, String> {
+    let mut findings = Vec::new();
+
+    for (label, payload) in fuzz_cases(nonce) {
+        let outcome = caller.send_raw(&payload);
+        record("protocol-fuzz", &payload, &outcome, spend)?;
+
+        // A server that answered is alive, so only silence is worth a check.
+        // Probing liveness after every case would double the traffic while
+        // counting half of it against the engagement's ceiling.
+        let answered = outcome
+            .as_ref()
+            .is_ok_and(|response| !response.body.trim().is_empty());
+
+        // A server that stops answering is the strongest result here, and also
+        // a reason to stop sending.
+        if !answered && !caller.is_alive() {
+            findings.push(
+                Finding::builder(
+                    "MCPWN-ACT-007",
+                    Category::Vulnerability,
+                    Severity::High,
+                    format!("The server stopped answering after a malformed message: {label}"),
+                )
+                .message(format!(
+                    "`{target}` no longer responds after receiving a message described as \
+                     \"{label}\". A malformed request that any caller can send should produce an \
+                     error, not the end of the process. Anyone who can reach this endpoint can \
+                     therefore stop it."
+                ))
+                .confidence(Confidence::High)
+                .remediation(
+                    "Handle parse failures as JSON-RPC errors rather than letting them escape.",
+                )
+                .evidence(Evidence::new("case", label.to_owned()))
+                .evidence(Evidence::new(
+                    "payload",
+                    payload.chars().take(200).collect::<String>(),
+                ))
+                .build(),
+            );
+            break;
+        }
+
+        let Ok(response) = outcome else { continue };
+        let body = response.body.to_lowercase();
+
+        if let Some(signature) = LEAK_SIGNATURES.iter().find(|s| body.contains(*s)) {
+            findings.push(
+                Finding::builder(
+                    "MCPWN-ACT-008",
+                    Category::Vulnerability,
+                    Severity::Medium,
+                    format!("An internal detail escapes in an error: {label}"),
+                )
+                .message(format!(
+                    "A malformed message described as \"{label}\" made `{target}` answer with what \
+                     looks like a stack trace. That hands a caller file paths, library versions \
+                     and internal structure, none of which is theirs to have, and it is usually a \
+                     sign the error reached the transport rather than being handled."
+                ))
+                .confidence(Confidence::High)
+                .remediation(
+                    "Return a JSON-RPC error with a message written for a caller, and log the \
+                     detail server-side.",
+                )
+                .evidence(Evidence::new("case", label.to_owned()))
+                .evidence(Evidence::new("signature", (*signature).to_owned()))
+                .evidence(Evidence::new(
+                    "response excerpt",
+                    response.body.chars().take(400).collect::<String>(),
+                ))
+                .build(),
+            );
+        }
+    }
+
+    Ok(findings)
+}

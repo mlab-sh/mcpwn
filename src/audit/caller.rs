@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::audit::stdio::StdioSession;
+
+/// How long a raw, possibly malformed message is given to draw an answer.
+const RAW_PATIENCE: Duration = Duration::from_secs(2);
 use crate::enumerate::PROTOCOL_VERSION;
 use crate::manifest::ToolManifest;
 
@@ -66,6 +69,21 @@ impl CallOutcome {
     }
 }
 
+/// A response as it came off the wire, before any interpretation.
+///
+/// The transport-level probes need this rather than a parsed result: a server
+/// that answers a malformed request with a 500 and a stack trace has told you
+/// something, and none of it survives being parsed as JSON-RPC.
+#[derive(Debug, Clone)]
+pub struct RawResponse {
+    /// HTTP status, or `None` on stdio where there is no such thing.
+    pub status: Option<u16>,
+    /// The raw header block, empty on stdio.
+    pub headers: String,
+    pub body: String,
+    pub duration: Duration,
+}
+
 /// Something that can list and call tools on one target.
 pub trait ToolCaller: std::fmt::Debug {
     /// A label for the transcript.
@@ -74,6 +92,21 @@ pub trait ToolCaller: std::fmt::Debug {
     fn list_tools(&mut self) -> Result<Vec<ToolManifest>, String>;
 
     fn call(&mut self, tool: &str, arguments: &Value) -> Result<CallOutcome, String>;
+
+    /// Send a message exactly as written, malformed or not.
+    ///
+    /// The tool-level probes go through `call`, which builds valid JSON-RPC.
+    /// The transport-level ones need to send something that is not.
+    fn send_raw(&mut self, body: &str) -> Result<RawResponse, String>;
+
+    /// Whether the target is still answering. A crash is a finding, and it is
+    /// also a reason to stop.
+    fn is_alive(&mut self) -> bool;
+
+    /// The endpoint URL, for probes that only make sense over HTTP.
+    fn endpoint(&self) -> Option<&str> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +209,24 @@ impl ToolCaller for StdioCaller {
         )?;
         Ok(CallOutcome::from_message(message, started.elapsed()))
     }
+
+    fn send_raw(&mut self, body: &str) -> Result<RawResponse, String> {
+        let started = Instant::now();
+        self.session.write_line(body)?;
+        // A malformed message may draw no answer at all, which is itself a
+        // result: a short deadline decides, not a hang.
+        let body = self.session.read_any(RAW_PATIENCE)?;
+        Ok(RawResponse {
+            status: None,
+            headers: String::new(),
+            body,
+            duration: started.elapsed(),
+        })
+    }
+
+    fn is_alive(&mut self) -> bool {
+        !self.session.is_finished()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -211,8 +262,13 @@ impl HttpCaller {
             .into()
     }
 
-    fn post(&self, body: &Value, session: Option<&str>, modern: bool) -> Result<Value, String> {
-        let method = body.get("method").and_then(Value::as_str).unwrap_or("");
+    fn post_text(
+        &self,
+        payload: &str,
+        method: &str,
+        session: Option<&str>,
+        modern: bool,
+    ) -> Result<(RawResponse, Option<String>), String> {
         let mut request = self
             .agent()
             .post(&self.url)
@@ -229,10 +285,9 @@ impl HttpCaller {
             request = request.header(name.as_str(), value.as_str());
         }
 
-        let payload =
-            serde_json::to_string(body).map_err(|err| format!("could not encode: {err}"))?;
+        let started = Instant::now();
         let mut response = request
-            .send(&payload)
+            .send(payload)
             .map_err(|err| format!("request failed: {err}"))?;
         let status = response.status().as_u16();
         let session_id = response
@@ -240,17 +295,42 @@ impl HttpCaller {
             .get("mcp-session-id")
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
-        let text = read_bounded(response.body_mut());
+        let headers = response
+            .headers()
+            .iter()
+            .map(|(name, value)| format!("{name}: {}", value.to_str().unwrap_or("")))
+            .collect::<Vec<_>>()
+            .join("\n");
 
-        let message = decode(&text).ok_or_else(|| format!("HTTP {status}: no JSON-RPC message"))?;
-        if let Some(session_id) = session_id {
-            // Remember a session the server minted, for the legacy path.
-            if let Some(slot) = self.legacy_session.as_ref() {
-                let _ = slot;
-            }
-            return Ok(json!({ "__session": session_id, "message": message }));
-        }
-        Ok(json!({ "message": message }))
+        Ok((
+            RawResponse {
+                status: Some(status),
+                headers,
+                body: read_bounded(response.body_mut()),
+                duration: started.elapsed(),
+            },
+            session_id,
+        ))
+    }
+
+    /// One well-formed request, decoded as JSON-RPC.
+    fn post(
+        &self,
+        body: &Value,
+        session: Option<&str>,
+        modern: bool,
+    ) -> Result<(Value, Option<String>), String> {
+        let method = body.get("method").and_then(Value::as_str).unwrap_or("");
+        let payload =
+            serde_json::to_string(body).map_err(|err| format!("could not encode: {err}"))?;
+        let (raw, session_id) = self.post_text(&payload, method, session, modern)?;
+        let message = decode(&raw.body).ok_or_else(|| {
+            format!(
+                "HTTP {}: no JSON-RPC message",
+                raw.status.unwrap_or_default()
+            )
+        })?;
+        Ok((message, session_id))
     }
 
     /// One request, resolving the protocol era on first use.
@@ -264,8 +344,7 @@ impl HttpCaller {
             let body = json!({
                 "jsonrpc": "2.0", "id": 1, "method": method, "params": modern_params
             });
-            if let Ok(envelope) = self.post(&body, None, true) {
-                let message = envelope["message"].clone();
+            if let Ok((message, _)) = self.post(&body, None, true) {
                 if message.get("result").is_some() {
                     return Ok(message);
                 }
@@ -276,7 +355,12 @@ impl HttpCaller {
 
         let session = self.legacy_session.clone().flatten();
         let body = json!({ "jsonrpc": "2.0", "id": 2, "method": method, "params": params });
-        Ok(self.post(&body, session.as_deref(), false)?["message"].clone())
+        Ok(self.post(&body, session.as_deref(), false)?.0)
+    }
+
+    /// The session the server minted, if it uses sessions at all.
+    pub fn session(&self) -> Option<&str> {
+        self.legacy_session.as_ref()?.as_deref()
     }
 
     fn initialize(&self) -> Result<Option<String>, String> {
@@ -288,20 +372,16 @@ impl HttpCaller {
                 "clientInfo": { "name": crate::NAME, "version": crate::VERSION }
             }
         });
-        let envelope = self.post(&body, None, false)?;
-        if envelope["message"].get("result").is_none() {
+        let (message, session) = self.post(&body, None, false)?;
+        if message.get("result").is_none() {
             return Err(format!(
                 "initialize rejected: {}",
-                envelope["message"]
+                message
                     .pointer("/error/message")
                     .and_then(Value::as_str)
                     .unwrap_or("unspecified error")
             ));
         }
-        let session = envelope
-            .get("__session")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
 
         // Required by the legacy lifecycle; a failure here is not fatal.
         let _ = self.post(
@@ -333,6 +413,23 @@ impl ToolCaller for HttpCaller {
             json!({ "name": tool, "arguments": arguments }),
         )?;
         Ok(CallOutcome::from_message(message, started.elapsed()))
+    }
+
+    fn send_raw(&mut self, body: &str) -> Result<RawResponse, String> {
+        let session = self.legacy_session.clone().flatten();
+        let modern = self.legacy_session.is_none();
+        Ok(self
+            .post_text(body, "tools/list", session.as_deref(), modern)?
+            .0)
+    }
+
+    fn is_alive(&mut self) -> bool {
+        // An endpoint is stateless: reachability is what "alive" means here.
+        self.request("tools/list", json!({})).is_ok()
+    }
+
+    fn endpoint(&self) -> Option<&str> {
+        Some(&self.url)
     }
 }
 

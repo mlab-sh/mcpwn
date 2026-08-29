@@ -146,6 +146,38 @@ impl StdioSession {
         }
     }
 
+    /// Write one line exactly as given, valid JSON or not.
+    pub fn write_line(&mut self, line: &str) -> Result<(), String> {
+        let stdin = self
+            .child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "the server's stdin is closed".to_owned())?;
+        writeln!(stdin, "{line}").map_err(|err| format!("could not write to the server: {err}"))?;
+        stdin
+            .flush()
+            .map_err(|err| format!("could not write to the server: {err}"))
+    }
+
+    /// Read whatever comes back next, without requiring it to match an id.
+    ///
+    /// Silence is an answer here: a server that says nothing to a malformed
+    /// message is behaving, and one that dies is the finding.
+    ///
+    /// `patience` is deliberately shorter than the request timeout. A server
+    /// answers a malformed message immediately or not at all, and waiting the
+    /// full deadline on every silent case turns a ten-case probe into a minute
+    /// of nothing.
+    pub fn read_any(&mut self, patience: Duration) -> Result<String, String> {
+        match self.stdout.recv_timeout(patience.min(self.timeout)) {
+            Ok(line) => Ok(line),
+            Err(RecvTimeoutError::Timeout) => Ok(String::new()),
+            Err(RecvTimeoutError::Disconnected) => {
+                Err(self.describe_failure("the server closed its output"))
+            }
+        }
+    }
+
     /// Send a message that expects no reply.
     pub fn notify(&mut self, message: &Value) -> Result<(), String> {
         let payload = serde_json::to_string(message)
