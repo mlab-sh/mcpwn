@@ -34,12 +34,11 @@ use mcpwn::audit::budget::{Budget, Transcript};
 use mcpwn::audit::caller::{HttpCaller, StdioCaller, ToolCaller};
 use mcpwn::audit::probes::{self, PROBES};
 use mcpwn::engagement::{Engagement, DEFAULT_ENGAGEMENT_FILE};
-use mcpwn::finding::Severity;
 use mcpwn::output::render::TerminalRenderer;
 use mcpwn::report::{Report, ScanMeta};
 use mcpwn::ToolManifest;
 
-use super::{exit, Cli};
+use super::{exit, Cli, Format, SeverityArg};
 
 #[derive(Debug, clap::Args)]
 pub struct AuditArgs {
@@ -72,6 +71,24 @@ pub struct RunArgs {
     /// Show what would be sent, and send nothing.
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Output format.
+    #[arg(short, long, value_enum, default_value_t = Format::Terminal)]
+    pub format: Format,
+
+    /// Path to the policy file. Defaults to `mcpwn.toml` in the working
+    /// directory, and is simply absent if there is none.
+    #[arg(long, value_name = "PATH")]
+    pub policy: Option<PathBuf>,
+
+    /// Ignore any policy file that would otherwise be picked up.
+    #[arg(long, conflicts_with = "policy")]
+    pub no_policy: bool,
+
+    /// Lowest severity that makes the run exit non-zero. Overrides the policy
+    /// file. Findings below it are still reported.
+    #[arg(long, value_name = "SEVERITY")]
+    pub fail_on: Option<SeverityArg>,
 }
 
 pub fn run(cli: &Cli, args: &AuditArgs) -> Result<i32> {
@@ -273,11 +290,46 @@ fn execute(cli: &Cli, args: &RunArgs) -> Result<i32> {
     report.extend(findings);
     report.sort();
 
+    // The same policy file the scanner reads: a rule accepted for a server is
+    // accepted whichever command found it.
+    let policy = cli.read_policy(args.policy.as_deref(), args.no_policy)?;
+    let effect = policy.apply(&mut report);
+    let fail_on = args
+        .fail_on
+        .map(Into::into)
+        .unwrap_or_else(|| policy.fail_on());
+
     let mut stdout = io::stdout().lock();
-    TerminalRenderer::new()
-        .color(cli.use_color())
-        .verbose(cli.verbose)
-        .render(&report, &mut stdout)?;
+    match args.format {
+        Format::Terminal => {
+            TerminalRenderer::new()
+                .color(cli.use_color())
+                .verbose(cli.verbose)
+                .render(&report, &mut stdout)?;
+        }
+        // The engagement travels with the findings: a report that does not say
+        // what was authorised, against what, and where the transcript is, is
+        // not a deliverable.
+        Format::Json => {
+            let payload = json!({
+                "report": report,
+                "engagement": {
+                    "target": engagement.target,
+                    "authorized_by": engagement.authorized_by,
+                    "reference": engagement.reference,
+                    "tools_in_scope": in_scope.iter().map(|t| &t.name).collect::<Vec<_>>(),
+                },
+                "transcript": transcript.path(),
+                "calls_sent": budget.spent(),
+            });
+            writeln!(stdout, "{}", serde_json::to_string_pretty(&payload)?)?;
+        }
+        Format::Sarif => writeln!(
+            stdout,
+            "{}",
+            mcpwn::output::sarif::to_sarif_string(&report)?
+        )?,
+    }
     stdout.flush()?;
 
     eprintln!(
@@ -285,17 +337,16 @@ fn execute(cli: &Cli, args: &RunArgs) -> Result<i32> {
         budget.spent(),
         transcript.path()
     );
+    cli.report_policy_effect(&effect);
     if let Some(reason) = stopped {
         cli.warn(&reason);
     }
 
-    Ok(
-        if report.max_severity().is_some_and(|s| s >= Severity::Medium) {
-            exit::FINDINGS
-        } else {
-            exit::CLEAN
-        },
-    )
+    Ok(if report.max_severity().is_some_and(|s| s >= fail_on) {
+        exit::FINDINGS
+    } else {
+        exit::CLEAN
+    })
 }
 
 /// Show the plan without sending anything.

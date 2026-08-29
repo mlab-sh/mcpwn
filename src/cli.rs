@@ -369,7 +369,7 @@ impl Cli {
         .with_probes(probes);
         let mut report = analyzer.analyze(&servers);
 
-        let policy = self.read_policy(args)?;
+        let policy = self.read_policy(args.policy.as_deref(), args.no_policy)?;
         let effect = policy.apply(&mut report);
         let fail_on = args
             .fail_on
@@ -389,12 +389,7 @@ impl Cli {
         self.emit_warnings(&loaded, &enumerated);
         // What the policy removed is said out loud: silently dropped findings
         // are how a policy file rots into a blindfold.
-        if !effect.is_empty() {
-            self.warn(&format!(
-                "policy applied: {} finding(s) suppressed, {} rule(s) disabled, {} re-tuned",
-                effect.suppressed, effect.disabled, effect.retuned
-            ));
-        }
+        self.report_policy_effect(&effect);
         self.write_lock(args, &lock_path, existing, &observed)?;
 
         let failing = report.max_severity().is_some_and(|worst| worst >= fail_on);
@@ -402,14 +397,13 @@ impl Cli {
     }
 
     /// Load the policy, unless told not to.
-    fn read_policy(&self, args: &ScanArgs) -> Result<Policy> {
-        if args.no_policy {
+    pub(crate) fn read_policy(&self, chosen: Option<&Path>, disabled: bool) -> Result<Policy> {
+        if disabled {
             return Ok(Policy::default());
         }
-        let explicit = args.policy.is_some();
-        let path = args
-            .policy
-            .clone()
+        let explicit = chosen.is_some();
+        let path = chosen
+            .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_POLICY_FILE));
 
         match Policy::load(&path) {
@@ -619,6 +613,18 @@ impl Cli {
             observed.len()
         );
         Ok(())
+    }
+
+    /// What a policy removed is said out loud: silently dropped findings are
+    /// how a policy file rots into a blindfold.
+    pub(crate) fn report_policy_effect(&self, effect: &mcpwn::policy::PolicyEffect) {
+        if effect.is_empty() {
+            return;
+        }
+        self.warn(&format!(
+            "policy applied: {} finding(s) suppressed, {} rule(s) disabled, {} re-tuned",
+            effect.suppressed, effect.disabled, effect.retuned
+        ));
     }
 
     /// A neutral line on stderr, so it never mixes with the report on stdout.

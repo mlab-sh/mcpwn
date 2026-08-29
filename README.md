@@ -148,6 +148,7 @@ reads; `audit` calls tools, which means it acts on the target.
 mcpwn audit init > engagement.toml
 mcpwn audit run --dry-run
 mcpwn audit run
+mcpwn audit run --format sarif --fail-on high > audit.sarif
 ```
 
 The engagement file is the only way in. There is no `--url` and no config
@@ -180,6 +181,9 @@ transport itself: session fixation, header injection, and malformed JSON-RPC.
 * Header injection needs the request written by hand over a socket, so it covers
   `http://` targets only. An `https://` one is reported as not covered.
 * Every request and response is written to a JSONL transcript as it happens.
+* `--format`, `--policy` and `--fail-on` work exactly as they do for `scan`, so
+  a rule accepted for a server is accepted whichever command found it. The JSON
+  output carries the engagement and the transcript path alongside the findings.
 
 A `stdio:` target launches the server, with no shell, a minimal environment, a
 deadline and a kill on every exit path. `scan`, `view` and `discover` still

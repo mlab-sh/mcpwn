@@ -690,3 +690,147 @@ fn the_fuzz_probe_runs_when_it_is_named() {
         "an unbounded payload was sent"
     );
 }
+
+// --- output formats and policy ----------------------------------------------
+//
+// The same machinery `scan` uses, so a rule accepted for a server is accepted
+// whichever command found it, and an audit can be a deliverable rather than a
+// screenshot of a terminal.
+
+#[test]
+fn audit_json_carries_the_engagement_alongside_the_findings() {
+    let tmp = TempDir::new("audit-json");
+    let path = engagement_for(&tmp, r#"["read_file"]"#, "");
+
+    let output = audit(&[
+        "run",
+        "-e",
+        &path,
+        "--transcript",
+        &tmp.path().join("t.jsonl").display().to_string(),
+        "--format",
+        "json",
+        "--no-policy",
+    ]);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("valid json");
+
+    assert_eq!(parsed["report"]["findings"][0]["id"], "MCPWN-ACT-001");
+    // A report that does not say what was authorised, against what, and where
+    // the transcript is, is not a deliverable.
+    assert_eq!(parsed["engagement"]["authorized_by"], "tests@example.com");
+    assert_eq!(parsed["engagement"]["reference"], "SELF-TEST");
+    assert_eq!(parsed["engagement"]["tools_in_scope"][0], "read_file");
+    assert!(parsed["transcript"]
+        .as_str()
+        .is_some_and(|p| p.ends_with(".jsonl")));
+    assert!(parsed["calls_sent"].as_u64().is_some_and(|n| n > 0));
+}
+
+#[test]
+fn audit_sarif_reuses_the_rule_catalogue() {
+    let tmp = TempDir::new("audit-sarif");
+    let path = engagement_for(&tmp, r#"["read_file"]"#, "");
+
+    let output = audit(&[
+        "run",
+        "-e",
+        &path,
+        "--transcript",
+        &tmp.path().join("t.jsonl").display().to_string(),
+        "--format",
+        "sarif",
+        "--no-policy",
+    ]);
+    let sarif: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("valid json");
+    let run = &sarif["runs"][0];
+
+    assert_eq!(sarif["version"], "2.1.0");
+    // Every rule mcpwn can emit, not just the ones this run produced, so the
+    // code-scanning UI can explain an alert it sees later.
+    assert_eq!(
+        run["tool"]["driver"]["rules"].as_array().map(Vec::len),
+        Some(mcpwn::explain::all().len())
+    );
+    assert_eq!(run["results"][0]["ruleId"], "MCPWN-ACT-001");
+    assert_eq!(run["results"][0]["level"], "error");
+}
+
+#[test]
+fn a_policy_can_accept_an_audit_finding() {
+    let tmp = TempDir::new("audit-policy");
+    let path = engagement_for(&tmp, r#"["read_file"]"#, "");
+    let policy = tmp.write(
+        "mcpwn.toml",
+        "[[ignore]]\nrule = \"MCPWN-ACT-001\"\nreason = \"deliberate on this fixture\"\n",
+    );
+
+    let output = audit(&[
+        "run",
+        "-e",
+        &path,
+        "--transcript",
+        &tmp.path().join("t.jsonl").display().to_string(),
+        "--policy",
+        &policy.display().to_string(),
+        "--no-color",
+    ]);
+
+    assert!(
+        !stdout(&output).contains("MCPWN-ACT-001"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(output.status.code(), Some(0), "nothing left to fail on");
+    // Silently dropped findings are how a policy file rots into a blindfold.
+    assert!(
+        stderr(&output).contains("1 finding(s) suppressed"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn fail_on_decides_the_exit_code_without_hiding_anything() {
+    let tmp = TempDir::new("audit-failon");
+    let path = engagement_for(&tmp, r#"["read_file"]"#, "");
+    // Re-tuned to Low, so a Medium threshold clears it.
+    let policy = tmp.write("mcpwn.toml", "[rules]\n\"MCPWN-ACT-001\" = \"low\"\n");
+    let transcript = tmp.path().join("t.jsonl").display().to_string();
+    let policy_path = policy.display().to_string();
+
+    let strict = audit(&[
+        "run",
+        "-e",
+        &path,
+        "--transcript",
+        &transcript,
+        "--policy",
+        &policy_path,
+        "--no-color",
+    ]);
+    assert_eq!(
+        strict.status.code(),
+        Some(1),
+        "the default threshold is low"
+    );
+
+    let lenient = audit(&[
+        "run",
+        "-e",
+        &path,
+        "--transcript",
+        &transcript,
+        "--policy",
+        &policy_path,
+        "--fail-on",
+        "medium",
+        "--no-color",
+    ]);
+    assert_eq!(lenient.status.code(), Some(0));
+    // Raising the threshold changes the exit code, never the report.
+    assert!(
+        stdout(&lenient).contains("MCPWN-ACT-001"),
+        "{}",
+        stdout(&lenient)
+    );
+}
