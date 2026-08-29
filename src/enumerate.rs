@@ -603,7 +603,7 @@ fn http_failure(status: u16, body: &str) -> String {
 /// The result shape is stable across every revision that matters here: a
 /// `tools` array of `{name, description?, inputSchema}`. 2026-07-28 added
 /// `ttlMs` / `cacheScope` alongside it, which are caching hints we ignore.
-fn parse_tools(result: &Value) -> Result<Vec<ToolManifest>, String> {
+pub(crate) fn parse_tools(result: &Value) -> Result<Vec<ToolManifest>, String> {
     let Some(items) = result.get("tools") else {
         return Err("malformed tools/list result: no `tools` field".to_owned());
     };

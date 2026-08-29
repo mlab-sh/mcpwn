@@ -414,6 +414,24 @@ struct Match {
     how: Evidence1,
 }
 
+/// Every capability a single parameter confers.
+///
+/// Exposed so callers outside the check can reuse the pattern table rather than
+/// keeping a second copy of it: `mcpwn audit` uses it to refuse to fuzz a tool
+/// that takes a command line.
+pub fn capabilities_of(param: &Param) -> Vec<Capability> {
+    let mut out = Vec::new();
+    if param.header_name.is_some() {
+        out.push(Capability::HeaderSmuggling);
+    }
+    if param.is_texty() {
+        if let Some(matched) = strongest_match(param) {
+            out.push(matched.capability);
+        }
+    }
+    out
+}
+
 /// The most severe capability this parameter matches, if any.
 fn strongest_match(param: &Param) -> Option<Match> {
     let tokens = tokenize(&param.name);

@@ -18,7 +18,9 @@
 
 pub mod analysis;
 pub mod analyzer;
+pub mod audit;
 pub mod discovery;
+pub mod engagement;
 pub mod enumerate;
 pub mod error;
 pub mod explain;

@@ -715,6 +715,108 @@ A server that legitimately documents an integration with another one will fire. 
 The reach is the finding, not the wording: whether it is hostile is the question \
 you are being asked to answer.",
     },
+    // --- confirmed by interaction (mcpwn audit) -----------------------------
+    RuleDoc {
+        id: "MCPWN-ACT-001",
+        title: "Path traversal",
+        category: Category::Vulnerability,
+        severity: Severity::Critical,
+        check: "audit:path-traversal",
+        summary: "A path parameter returned a file outside any plausible root.",
+        detail: "\
+The tool was called with a path parameter set to a traversal payload and \
+returned content that only exists outside an application's own data directory. \
+The same call with an ordinary value did not, so this is the payload being \
+followed rather than a fixed response.
+
+Confirmed by interaction, not inferred from the schema. `MCPWN-CAP-003` says the \
+tool *can* reach a caller-chosen path; this says it *does*, without confinement.
+
+Produced only by `mcpwn audit`, under an engagement.",
+        example: Some("path = \"../../../../../../../../etc/passwd\" returns a line starting root:x:0:0"),
+        remediation: "\
+Resolve the path and verify it stays inside the intended root **after** \
+canonicalisation, not before. Checking the string for `..` is not the same \
+thing, and never has been.",
+        expected_noise: "\
+Very low. The oracle is content that has no reason to appear, and every hit is \
+re-checked against a control call that must not produce it.",
+    },
+    RuleDoc {
+        id: "MCPWN-ACT-002",
+        title: "Command injection",
+        category: Category::Vulnerability,
+        severity: Severity::Critical,
+        check: "audit:command-injection",
+        summary: "A shell metacharacter in a parameter was interpreted rather than passed through.",
+        detail: "\
+The tool was called with a parameter containing a shell separator followed by an \
+`echo` of a per-run marker, and the marker came back. The caller therefore \
+chooses what runs on the machine hosting the server.
+
+The marker is written with quotes a shell removes: echoed back literally it \
+reads `mc\"\"pwn-<nonce>`, and only an interpreted payload produces the \
+unquoted form the oracle looks for. A server that simply reflects its input \
+cannot trigger this.
+
+Only `echo` is ever sent. Nothing destructive, so the finding is reproducible \
+and the target is unchanged.
+
+Produced only by `mcpwn audit`, under an engagement.",
+        example: Some("command = \"; echo mc\\\"\\\"pwn-3f9a\" returns mcpwn-3f9a"),
+        remediation: "\
+Pass arguments as a list to exec rather than building a command line. There is \
+then no shell to inject into.",
+        expected_noise: "Essentially none: the marker is per-run and cannot appear by chance.",
+    },
+    RuleDoc {
+        id: "MCPWN-ACT-003",
+        title: "SQL injection",
+        category: Category::Vulnerability,
+        severity: Severity::High,
+        check: "audit:sql-injection",
+        summary: "An unbalanced quote reached the database engine.",
+        detail: "\
+A single quote in a parameter produced a database error naming its own syntax, \
+which means the value is concatenated into a statement rather than bound to it. \
+The control call with an ordinary value produced no such error.
+
+Error-based only. No timing inference, which is unreliable over a network, and \
+nothing that writes: no `DROP`, no `UPDATE`, no `DELETE`.
+
+Produced only by `mcpwn audit`, under an engagement.",
+        example: Some("query = \"'\" returns a message containing \"unterminated quoted string\""),
+        remediation: "Use parameter binding. Escaping is not a substitute.",
+        expected_noise: "\
+A server that echoes a database error for unrelated reasons would fire, which is \
+why the control call has to come back clean before anything is reported.",
+    },
+    RuleDoc {
+        id: "MCPWN-ACT-004",
+        title: "Server-side request forgery to the metadata service",
+        category: Category::Vulnerability,
+        severity: Severity::Critical,
+        check: "audit:ssrf",
+        summary: "A URL parameter fetched the cloud instance metadata service.",
+        detail: "\
+The tool fetched a caller-chosen URL pointing at the link-local metadata address \
+and returned what it found. That address is where a cloud instance's role \
+credentials live, so this is not merely a request the server should not have \
+made: it is a path to the credentials the server runs as.
+
+In-band only. The answer has to come back through the tool's own response, so \
+there is no listener and nothing is opened to the outside.
+
+Produced only by `mcpwn audit`, under an engagement.",
+        example: Some("url = \"http://169.254.169.254/latest/meta-data/\" returns ami-id, instance-id"),
+        remediation: "\
+Resolve the destination and refuse link-local and private ranges **after** \
+resolution, and refuse redirects that land in them. An allowlist of hosts is \
+better than a denylist of addresses.",
+        expected_noise: "\
+Low, and a hit is checked against a control. A server deliberately proxying the \
+metadata service is a finding either way.",
+    },
     // --- toxic flow ---------------------------------------------------------
     RuleDoc {
         id: "MCPWN-FLOW-001",

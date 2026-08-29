@@ -60,6 +60,9 @@ pub enum Category {
     Capability,
     /// A source -> ingest -> sink chain that can exfiltrate data.
     ToxicFlow,
+    /// A defect confirmed by interacting with a live server, rather than
+    /// inferred from what it declares. Only `mcpwn audit` produces these.
+    Vulnerability,
 }
 
 impl Category {
@@ -72,16 +75,18 @@ impl Category {
             Category::RugPull => "rug-pull",
             Category::Capability => "capability",
             Category::ToxicFlow => "toxic-flow",
+            Category::Vulnerability => "vulnerability",
         }
     }
 
-    pub const ALL: [Category; 6] = [
+    pub const ALL: [Category; 7] = [
         Category::ToolPoisoning,
         Category::Obfuscation,
         Category::Shadowing,
         Category::RugPull,
         Category::Capability,
         Category::ToxicFlow,
+        Category::Vulnerability,
     ];
 }
 

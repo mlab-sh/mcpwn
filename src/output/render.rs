@@ -69,10 +69,10 @@ impl TerminalRenderer {
         let target = report.meta.target.as_deref().unwrap_or("(no target)");
         writeln!(
             out,
-            "{} {}; {}",
+            "{} {}  {}",
             self.paint(crate::NAME, Style::new().bold().cyan()),
             crate::VERSION,
-            target
+            self.paint(target, Style::new().dimmed())
         )?;
         writeln!(
             out,

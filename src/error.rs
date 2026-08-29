@@ -36,6 +36,10 @@ pub enum Error {
     #[error("policy `{path}`: {message}")]
     Policy { path: String, message: String },
 
+    /// The engagement file could not be used.
+    #[error("engagement `{path}`: {message}")]
+    Engagement { path: String, message: String },
+
     /// A rule set failed to compile.
     #[error("invalid rule set: {0}")]
     Rules(String),
@@ -60,6 +64,13 @@ impl Error {
     pub fn header(name: Option<String>, message: impl Into<String>) -> Self {
         Self::Header {
             name,
+            message: message.into(),
+        }
+    }
+
+    pub fn engagement(path: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Engagement {
+            path: path.into(),
             message: message.into(),
         }
     }

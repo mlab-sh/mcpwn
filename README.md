@@ -61,7 +61,7 @@ Exit codes: `0` clean, `1` findings at or above the threshold, `2` error.
 
 ## What it detects
 
-28 rules. `mcpwn explain` lists them all; `mcpwn explain <ID>` gives the detail.
+32 rules. `mcpwn explain` lists them all; `mcpwn explain <ID>` gives the detail.
 
 | Family | Rules | What |
 |---|---|---|
@@ -72,6 +72,7 @@ Exit codes: `0` clean, `1` findings at or above the threshold, `2` error.
 | Shadowing | `MCPWN-SHA-001..003` | Colliding tool names, look-alike names, a server giving instructions about another server's tool |
 | Toxic flow | `MCPWN-FLOW-001` | An ingest, a source and a sink coexisting in one environment |
 | Reconnaissance | `MCPWN-NET-001..006` | Needs `--probe`: unenforced credentials, missing auth discovery, deprecated transport, plaintext downgrade, unvalidated protocol and headers |
+| Confirmed defects | `MCPWN-ACT-001..004` | `mcpwn audit` only: path traversal, command injection, SQL injection, SSRF |
 
 ## Probing an endpoint
 
@@ -138,6 +139,46 @@ The GitHub Action wraps all of it:
 See [`.github/workflows/mcpwn-example.yml`](.github/workflows/mcpwn-example.yml)
 for a complete workflow.
 
+## mcpwn audit
+
+Active testing of a server you are entitled to act on. Every other command
+reads; `audit` calls tools, which means it acts on the target.
+
+```bash
+mcpwn audit init > engagement.toml
+mcpwn audit run --dry-run
+mcpwn audit run
+```
+
+The engagement file is the only way in. There is no `--url` and no config
+discovery, so one command can never reach every server on a machine.
+
+```toml
+target = "https://mcp.example.com/mcp"
+authorized_by = "you@example.com"
+reference = "PT-2026-014"
+
+[limits]
+rate_per_second = 2
+max_requests = 500
+
+[tools]
+allow = ["read_file", "fetch_url"]   # nothing else is called
+allow_dangerous = false              # tools that take a command line
+```
+
+Four probes: path traversal, command injection, SQL injection, SSRF to the cloud
+metadata service. Each poisons one parameter and looks for a specific oracle.
+
+* Nothing destructive is sent. `; echo` yes, `; rm` never.
+* Every hit is re-checked against a control call that must come back clean.
+* Tools that take a command line are skipped unless `allow_dangerous` is set.
+* Every request and response is written to a JSONL transcript as it happens.
+
+A `stdio:` target launches the server, with no shell, a minimal environment, a
+deadline and a kill on every exit path. `scan`, `view` and `discover` still
+never launch anything and never call a tool.
+
 ## Supported clients
 
 Claude Desktop, Cursor, Windsurf, Continue, Zed, Codex, VS Code. Global
@@ -154,6 +195,8 @@ discovered and listed, but reported as not yet parseable.
 * Enumerating a remote server is a network request. The analysis is static; the
   tool list has to come from somewhere.
 * Tool poisoning detection is not implemented yet.
+* `mcpwn audit` never runs without an engagement file, and never calls a tool
+  the engagement did not name.
 
 ## Development
 

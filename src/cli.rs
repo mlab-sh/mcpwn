@@ -1,6 +1,8 @@
 //! Argument parsing and command dispatch. Binary-only: the library knows
 //! nothing about it.
 
+mod audit;
+
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
@@ -55,6 +57,9 @@ pub enum Command {
     Diff(DiffArgs),
     /// Print a starter `mcpwn.toml` policy file.
     InitPolicy,
+    /// Actively test one server under an engagement. Unlike every other
+    /// command, this calls tools, which means it acts on the target.
+    Audit(audit::AuditArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -254,6 +259,7 @@ impl Cli {
             Command::Scan(args) => self.scan(args),
             Command::Explain(args) => self.explain(args),
             Command::Diff(args) => self.diff(args),
+            Command::Audit(args) => audit::run(self, args),
             Command::InitPolicy => {
                 print!("{}", mcpwn::policy::TEMPLATE);
                 Ok(exit::CLEAN)
@@ -615,7 +621,16 @@ impl Cli {
         Ok(())
     }
 
-    fn warn(&self, message: &str) {
+    /// A neutral line on stderr, so it never mixes with the report on stdout.
+    pub(crate) fn note(&self, message: &str) {
+        if self.use_color_stderr() {
+            eprintln!("{}", message.bold());
+        } else {
+            eprintln!("{message}");
+        }
+    }
+
+    pub(crate) fn warn(&self, message: &str) {
         if self.use_color_stderr() {
             eprintln!("{} {message}", "warning:".yellow().bold());
         } else {
@@ -634,7 +649,7 @@ impl Cli {
         }
     }
 
-    fn use_color(&self) -> bool {
+    pub(crate) fn use_color(&self) -> bool {
         !self.no_color && io::stdout().is_terminal()
     }
 
