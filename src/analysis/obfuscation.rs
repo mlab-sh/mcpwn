@@ -169,7 +169,13 @@ impl ToolCheck for ObfuscationCheck {
             // problem, not one per codepoint.
             for kind in normalized.kinds() {
                 let notes: Vec<&NormalizationNote> = normalized.notes_of(kind).collect();
-                findings.push(finding(&subject, &tool.tool.name, &label, kind, &notes));
+                findings.push(note_finding(
+                    &subject,
+                    &format!("`{}`", tool.tool.name),
+                    &label,
+                    kind,
+                    &notes,
+                ));
             }
         }
 
@@ -177,9 +183,14 @@ impl ToolCheck for ObfuscationCheck {
     }
 }
 
-fn finding(
+/// Build one obfuscation finding.
+///
+/// `owner` is the already-formatted name of whatever carries the field, so the
+/// same machinery serves a tool, a prompt and a resource without any of them
+/// leaking into this module: see [`super::surface`] for the other two callers.
+pub(crate) fn note_finding(
     subject: &ToolRef,
-    tool_name: &str,
+    owner: &str,
     field: &str,
     kind: NoteKind,
     notes: &[&NormalizationNote],
@@ -188,7 +199,7 @@ fn finding(
     let codepoints: usize = notes.iter().map(|n| n.codepoints.len()).sum();
 
     let mut message = format!(
-        "The `{field}` of `{tool_name}` contains {codepoints} {kind} codepoint(s) in \
+        "The `{field}` of {owner} contains {codepoints} {kind} codepoint(s) in \
          {occurrences} run(s); {}.",
         statement(kind)
     );

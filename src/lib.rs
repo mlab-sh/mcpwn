@@ -42,6 +42,7 @@ pub use analysis::obfuscation::ObfuscationCheck;
 pub use analysis::registry::Registry;
 pub use analysis::rugpull::RugPullCheck;
 pub use analysis::shadowing::ShadowingCheck;
+pub use analysis::surface::SurfaceCheck;
 pub use analyzer::{Analyzer, AnalyzerConfig};
 pub use discovery::{Client, ConfigFormat, DiscoveredConfig, Scope};
 pub use enumerate::{EnumeratedServer, Enumeration, StaticEnumerator};
@@ -50,7 +51,10 @@ pub use explain::RuleDoc;
 pub use finding::{Category, Confidence, Evidence, Finding, FindingId, Severity, Span};
 pub use loading::{LoadStatus, LoadedConfig};
 pub use lock::{Lock, LockedServer, LockedTool, ServerId, ToolChange};
-pub use manifest::{ServerManifest, ToolManifest, ToolRef, Transport};
+pub use manifest::{
+    PromptArgument, PromptManifest, ResourceManifest, ServerManifest, SubjectKind, ToolManifest,
+    ToolRef, Transport,
+};
 pub use policy::Policy;
 pub use recon::{Prober, ServerProbe};
 pub use report::{Report, ScanMeta};

@@ -10,7 +10,7 @@ use owo_colors::{OwoColorize, Style};
 
 use crate::analysis::schema::{self, Param};
 use crate::enumerate::{EnumeratedServer, Enumeration};
-use crate::manifest::{ToolManifest, Transport};
+use crate::manifest::{PromptManifest, ResourceManifest, ToolManifest, Transport};
 use crate::recon::ServerProbe;
 
 /// Width the prose is wrapped to. Descriptions are the whole point of this
@@ -77,7 +77,7 @@ impl ViewRenderer {
             return writeln!(out, "no server to view");
         }
 
-        let mut shown = 0usize;
+        let mut shown = Shown::default();
         for (i, entry) in servers.iter().enumerate() {
             if i > 0 {
                 writeln!(out)?;
@@ -87,14 +87,14 @@ impl ViewRenderer {
 
         writeln!(out)?;
         if let Some(filter) = &self.filter {
-            writeln!(out, "{shown} tool(s) matching `{filter}`")
+            writeln!(out, "{} matching `{filter}`", shown.summary())
         } else {
-            writeln!(out, "{} server(s), {shown} tool(s)", servers.len())
+            writeln!(out, "{} server(s), {}", servers.len(), shown.summary())
         }
     }
 
-    /// Returns how many tools were printed.
-    fn server<W: Write>(&self, entry: &EnumeratedServer, out: &mut W) -> io::Result<usize> {
+    /// Returns how much of each surface was printed.
+    fn server<W: Write>(&self, entry: &EnumeratedServer, out: &mut W) -> io::Result<Shown> {
         writeln!(
             out,
             "{}",
@@ -111,22 +111,27 @@ impl ViewRenderer {
 
         match &entry.outcome {
             Enumeration::Enumerated { protocol } => {
+                let counted = Shown {
+                    tools: entry.server.tools.len(),
+                    prompts: entry.server.prompts.len(),
+                    resources: entry.server.resources.len(),
+                };
                 writeln!(
                     out,
                     "  {}",
                     self.paint(
-                        format!("{} tool(s) via MCP {protocol}", entry.server.tools.len()),
+                        format!("{} via MCP {protocol}", counted.summary()),
                         Style::new().dimmed()
                     )
                 )?;
             }
             Enumeration::NotPossible { reason } => {
                 writeln!(out, "  {}", self.paint(reason, Style::new().dimmed()))?;
-                return Ok(0);
+                return Ok(Shown::default());
             }
             Enumeration::Failed { reason } => {
                 writeln!(out, "  {}", self.paint(reason, Style::new().red()))?;
-                return Ok(0);
+                return Ok(Shown::default());
             }
         }
 
@@ -138,17 +143,152 @@ impl ViewRenderer {
             .server
             .tools
             .iter()
-            .filter(|tool| match &self.filter {
-                Some(filter) => tool.name.to_lowercase().contains(filter),
-                None => true,
-            })
+            .filter(|tool| self.matches(&tool.name))
             .collect();
 
         for tool in &tools {
             writeln!(out)?;
             self.tool(tool, out)?;
         }
-        Ok(tools.len())
+
+        // The other two surfaces the model is shown. They come after the tools
+        // because tools are what most readers opened this command for, and
+        // before the summary because they are part of the same server.
+        let prompts: Vec<&PromptManifest> = entry
+            .server
+            .prompts
+            .iter()
+            .filter(|prompt| self.matches(&prompt.name))
+            .collect();
+        for prompt in &prompts {
+            writeln!(out)?;
+            self.prompt(prompt, out)?;
+        }
+
+        let resources: Vec<&ResourceManifest> = entry
+            .server
+            .resources
+            .iter()
+            // A resource is as often looked up by URI as by name, so both count.
+            .filter(|resource| self.matches(&resource.name) || self.matches(&resource.uri))
+            .collect();
+        for resource in &resources {
+            writeln!(out)?;
+            self.resource(resource, out)?;
+        }
+
+        Ok(Shown {
+            tools: tools.len(),
+            prompts: prompts.len(),
+            resources: resources.len(),
+        })
+    }
+
+    /// Whether a name passes the `--filter`, which is absent most of the time.
+    fn matches(&self, name: &str) -> bool {
+        match &self.filter {
+            Some(filter) => name.to_lowercase().contains(filter),
+            None => true,
+        }
+    }
+
+    fn prompt<W: Write>(&self, prompt: &PromptManifest, out: &mut W) -> io::Result<()> {
+        writeln!(
+            out,
+            "  {} {}",
+            self.paint(&prompt.name, Style::new().bold()),
+            self.paint("prompt", Style::new().dimmed())
+        )?;
+
+        let described = !prompt.description.trim().is_empty();
+        for line in wrap(&prompt.description, WIDTH - 4) {
+            if line.is_empty() {
+                writeln!(out)?;
+            } else {
+                writeln!(out, "    {line}")?;
+            }
+        }
+
+        // A boundary before the arguments, for the same reason the tool path
+        // has one: descriptions run long, and the two blocks must not merge.
+        if described {
+            writeln!(out)?;
+        }
+
+        if prompt.arguments.is_empty() {
+            return writeln!(
+                out,
+                "    {}",
+                self.paint("no arguments", Style::new().dimmed())
+            );
+        }
+
+        writeln!(
+            out,
+            "    {}",
+            self.paint("arguments", Style::new().dimmed())
+        )?;
+        let name_width = prompt
+            .arguments
+            .iter()
+            .map(|a| a.name.len())
+            .max()
+            .unwrap_or(0)
+            .min(32);
+        for argument in &prompt.arguments {
+            let required = if argument.required {
+                self.paint("required", Style::new().yellow())
+            } else {
+                self.paint("optional", Style::new().dimmed())
+            };
+            writeln!(
+                out,
+                "    {:<name_width$}  {}",
+                self.paint(&argument.name, Style::new().green()),
+                required
+            )?;
+            if let Some(description) = &argument.description {
+                for line in wrap(description, WIDTH - 6) {
+                    writeln!(out, "      {line}")?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn resource<W: Write>(&self, resource: &ResourceManifest, out: &mut W) -> io::Result<()> {
+        let label = if resource.template {
+            "resource template"
+        } else {
+            "resource"
+        };
+        let heading = if resource.name.is_empty() {
+            resource.uri.clone()
+        } else {
+            resource.name.clone()
+        };
+        writeln!(
+            out,
+            "  {} {}",
+            self.paint(heading, Style::new().bold()),
+            self.paint(label, Style::new().dimmed())
+        )?;
+        writeln!(
+            out,
+            "    {}",
+            self.paint(&resource.uri, Style::new().green())
+        )?;
+        if let Some(mime_type) = &resource.mime_type {
+            writeln!(out, "    {}", self.paint(mime_type, Style::new().dimmed()))?;
+        }
+        for line in wrap(&resource.description, WIDTH - 4) {
+            if line.is_empty() {
+                writeln!(out)?;
+            } else {
+                writeln!(out, "    {line}")?;
+            }
+        }
+        Ok(())
     }
 
     /// The facts the reconnaissance pass gathered, stated plainly. Whether any
@@ -336,6 +476,40 @@ impl ViewRenderer {
         } else {
             text.to_string()
         }
+    }
+}
+
+/// How much of each surface a render printed.
+#[derive(Debug, Default, Clone, Copy)]
+struct Shown {
+    tools: usize,
+    prompts: usize,
+    resources: usize,
+}
+
+impl Shown {
+    /// Counts as prose, listing only the surfaces the server actually has.
+    ///
+    /// Tools are always named, even at zero, because a server with none is
+    /// worth noticing. Prompts and resources are omitted when empty: most
+    /// servers expose neither, and two permanent zeroes would be noise.
+    fn summary(&self) -> String {
+        let mut parts = vec![format!("{} tool(s)", self.tools)];
+        if self.prompts > 0 {
+            parts.push(format!("{} prompt(s)", self.prompts));
+        }
+        if self.resources > 0 {
+            parts.push(format!("{} resource(s)", self.resources));
+        }
+        parts.join(", ")
+    }
+}
+
+impl std::ops::AddAssign for Shown {
+    fn add_assign(&mut self, other: Self) {
+        self.tools += other.tools;
+        self.prompts += other.prompts;
+        self.resources += other.resources;
     }
 }
 

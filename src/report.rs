@@ -15,6 +15,12 @@ pub struct ScanMeta {
     pub servers: usize,
     /// Number of tools seen across those servers.
     pub tools: usize,
+    /// Number of prompts seen. Absent from older reports, hence the default.
+    #[serde(default)]
+    pub prompts: usize,
+    /// Number of resources seen, templates included.
+    #[serde(default)]
+    pub resources: usize,
     /// Version of mcpwn that produced the report.
     pub scanner_version: String,
 }
@@ -25,8 +31,26 @@ impl ScanMeta {
             target,
             servers: 0,
             tools: 0,
+            prompts: 0,
+            resources: 0,
             scanner_version: crate::VERSION.to_owned(),
         }
+    }
+
+    /// The scanned surface as prose, naming only what was actually there.
+    ///
+    /// Tools are always stated, even at zero: a server exposing none is worth
+    /// noticing. Prompts and resources are left out when empty, because most
+    /// servers have neither and two permanent zeroes teach the reader nothing.
+    pub fn surface_summary(&self) -> String {
+        let mut parts = vec![format!("{} tool(s)", self.tools)];
+        if self.prompts > 0 {
+            parts.push(format!("{} prompt(s)", self.prompts));
+        }
+        if self.resources > 0 {
+            parts.push(format!("{} resource(s)", self.resources));
+        }
+        parts.join(", ")
     }
 }
 

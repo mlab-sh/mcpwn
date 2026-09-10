@@ -76,8 +76,9 @@ impl TerminalRenderer {
         )?;
         writeln!(
             out,
-            "{} server(s), {} tool(s) analysed",
-            report.meta.servers, report.meta.tools
+            "{} server(s), {} analysed",
+            report.meta.servers,
+            report.meta.surface_summary()
         )
     }
 

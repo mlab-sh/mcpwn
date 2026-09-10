@@ -4,8 +4,8 @@
 
 <p align="center"><img src=".github/banner.png" alt="mcpwn"></p>
 
-mcpwn reads the tool definitions an MCP server advertises and flags the ones
-that can turn an agent against its user.
+mcpwn reads the tools, prompts and resources an MCP server advertises and flags
+the ones that can turn an agent against its user.
 
 Scanning never launches an MCP server and never calls a tool. `mcpwn audit`
 does both, deliberately, and only under an engagement file that names the
@@ -45,7 +45,7 @@ Find the MCP configs on this machine, without analysing them:
 mcpwn discover
 ```
 
-See everything a server exposes, with no analysis:
+See everything a server exposes, tools, prompts and resources, with no analysis:
 
 ```bash
 mcpwn view --url https://example.com/mcp
@@ -89,7 +89,7 @@ Exit codes: `0` clean, `1` findings at or above the threshold, `2` error.
 |---|---|---|
 | Configuration | `MCPWN-CFG-001..004` | Plaintext credentials, unpinned launch packages, `http://` endpoints, credentials in URLs |
 | Capability | `MCPWN-CAP-001..005` | Command execution, code evaluation, filesystem and network access, `x-mcp-header` mirroring |
-| Obfuscation | `MCPWN-OBF-001..006` | Unicode tag characters, zero-width characters, bidi overrides, homoglyphs, encoded payloads |
+| Obfuscation | `MCPWN-OBF-001..006` | Unicode tag characters, zero-width characters, bidi overrides, homoglyphs, encoded payloads, in tools, prompts and resources alike |
 | Rug pull | `MCPWN-RUG-001..003` | Tools that changed, disappeared or appeared since the lockfile |
 | Shadowing | `MCPWN-SHA-001..003` | Colliding tool names, look-alike names, a server giving instructions about another server's tool |
 | Toxic flow | `MCPWN-FLOW-001` | An ingest, a source and a sink coexisting in one environment |
@@ -222,11 +222,13 @@ discovered and listed, but reported as not yet parseable.
 
 ## Limits
 
-* stdio servers are never launched, so their tools are never listed. Only the
-  configuration checks apply to them.
+* stdio servers are never launched, so their tools, prompts and resources are
+  never listed. Only the configuration checks apply to them.
 * Enumerating a remote server is a network request. The analysis is static; the
   tool list has to come from somewhere.
 * Tool poisoning detection is not implemented yet.
+* Resources are read as *advertised*: mcpwn never calls `resources/read`, so
+  what a resource actually returns is out of scope for a scan.
 * `mcpwn audit` never runs without an engagement file, and never calls a tool
   the engagement did not name.
 

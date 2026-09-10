@@ -16,7 +16,7 @@ Three levels, because the detections do not all look at the same thing.
 
 | Trait | Sees | Used by |
 |---|---|---|
-| `ServerCheck` | one server's configuration | secrets, pinning, transport, reconnaissance |
+| `ServerCheck` | one server's configuration, prompts and resources | secrets, pinning, transport, reconnaissance, surface |
 | `ToolCheck` | one tool | capabilities, obfuscation |
 | `GlobalCheck` | every tool of every server | toxic flows, shadowing, rug pull |
 
@@ -95,8 +95,13 @@ cannot be evaded; the lock exists so a change cannot be hidden.
 ## Obfuscation
 
 Text a human reviewer and a model do not read the same. Applied to every
-model-visible string: tool name, tool description, and the names and
-descriptions of every parameter.
+model-visible string of all three surfaces: a tool's name, description and
+parameter names and descriptions; a prompt's name, title, description and
+argument descriptions; a resource's URI, name, title, description and MIME type.
+
+A resource URI is in that list and not merely as an identifier. A look-alike
+hostname or an invisible character in a path is how one resource is made to pass
+for another.
 
 Unicode tag characters sit alone at Critical. The U+E0000 block mirrors
 printable ASCII as invisible codepoints, has no use in prose, and text hidden
@@ -108,6 +113,24 @@ the signal is a mix **inside one word**, never the presence of non-Latin text. A
 description written entirely in Russian is ordinary. The finding names only the
 letters in the minority script, so `updаte_config` reports the single Cyrillic
 `а` rather than all ten letters.
+
+## Prompts and resources
+
+Tools get the attention because they act, but a prompt is expanded into the
+conversation and a resource is fetched into the context, so both are prose the
+model follows. A server whose tools are clean and whose prompt description
+carries a hidden instruction is not a clean server.
+
+[`SurfaceCheck`](../src/analysis/surface.rs) runs the same normalisation over
+both and reports through the obfuscation rule ids. That reuse is deliberate: a
+zero-width payload is the same defect wherever it is found, and splitting the
+catalogue by location would only make a finding harder to look up. The finding's
+subject says where it was, rendering as `server::prompts/name` or
+`server::resources/uri`.
+
+What this check does not do is fetch a resource. `resources/read` returns
+attacker-chosen content and is a live interaction, which is `mcpwn audit`'s
+territory and needs an engagement file.
 
 ## Rug pull
 

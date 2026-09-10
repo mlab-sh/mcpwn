@@ -1,4 +1,5 @@
-//! Step 3: fill in a server's tools, **statically only**.
+//! Step 3: fill in a server's tools, prompts and resources, **statically
+//! only**.
 //!
 //! # The safety rule
 //!
@@ -10,7 +11,9 @@
 //!
 //! A remote HTTP server is different: asking its endpoint for `tools/list` is a
 //! read-only network request, not local code execution, so it *is* enumerable
-//! here.
+//! here. The same goes for `prompts/list` and the two resource lists, which are
+//! asked for once the era has been settled. `resources/read` is **not**: it
+//! returns content the server chooses, which is a live interaction.
 //!
 //! # Protocol
 //!
@@ -36,7 +39,9 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
-use crate::manifest::{ServerManifest, ToolManifest, Transport};
+use crate::manifest::{
+    PromptArgument, PromptManifest, ResourceManifest, ServerManifest, ToolManifest, Transport,
+};
 
 /// The protocol revision mcpwn speaks first.
 pub const PROTOCOL_VERSION: &str = "2026-07-28";
@@ -171,9 +176,11 @@ impl StaticEnumerator {
             }
         };
 
-        match self.list_tools(&url) {
-            Ok((tools, protocol)) => {
-                server.tools = tools;
+        match self.list_surface(&url) {
+            Ok((surface, protocol)) => {
+                server.tools = surface.tools;
+                server.prompts = surface.prompts;
+                server.resources = surface.resources;
                 EnumeratedServer {
                     server,
                     outcome: Enumeration::Enumerated { protocol },
@@ -186,11 +193,45 @@ impl StaticEnumerator {
         }
     }
 
-    /// Dual-era `tools/list`. Returns the tools and the revision that worked.
-    fn list_tools(&self, url: &str) -> Result<(Vec<ToolManifest>, String), String> {
+    /// Dual-era negotiation plus every list the server offers.
+    ///
+    /// Tools decide the outcome: a server whose tools cannot be listed is a
+    /// failed enumeration, exactly as before. Prompts and resources are
+    /// *optional* MCP capabilities, so a server that answers `-32601` to them
+    /// has simply not implemented them, and that must not turn a good scan into
+    /// a failed one.
+    fn list_surface(&self, url: &str) -> Result<(Surface, String), String> {
+        let (session, tools_result) = self.negotiate(url)?;
+        let mut surface = Surface {
+            tools: parse_tools(&tools_result)?,
+            ..Surface::default()
+        };
+
+        if let Some(result) = self.optional_list(url, &session, "prompts/list") {
+            surface.prompts = parse_prompts(&result);
+        }
+        if let Some(result) = self.optional_list(url, &session, "resources/list") {
+            surface.resources = parse_resources(&result);
+        }
+        // Templates are a separate list, and the more interesting one: a
+        // template is a parameterised read the model can be steered into
+        // filling in.
+        if let Some(result) = self.optional_list(url, &session, "resources/templates/list") {
+            surface.resources.extend(parse_resource_templates(&result));
+        }
+
+        let protocol = session.protocol().to_owned();
+        Ok((surface, protocol))
+    }
+
+    /// Settle which era and revision this server speaks, and list its tools.
+    ///
+    /// Tool listing is part of negotiation rather than a step after it, because
+    /// the legacy handshake only proves itself when a real call succeeds.
+    fn negotiate(&self, url: &str) -> Result<(Session, Value), String> {
         // 1. Modern, stateless.
-        match self.modern_tools_list(url, PROTOCOL_VERSION) {
-            Probe::Ok(value) => return Ok((parse_tools(&value)?, PROTOCOL_VERSION.to_owned())),
+        match self.modern_call(url, PROTOCOL_VERSION, "tools/list") {
+            Probe::Ok(value) => return Ok((Session::modern(PROTOCOL_VERSION), value)),
             // 2. A modern server that refuses this revision tells us what it takes.
             Probe::ModernVersionMismatch(supported) => {
                 if let Some(version) = supported.iter().find(|v| v.as_str() == PROTOCOL_VERSION) {
@@ -202,12 +243,10 @@ impl StaticEnumerator {
                 for version in &supported {
                     if LEGACY_PROTOCOL_VERSIONS.contains(&version.as_str()) {
                         // Advertised version predates statelessness: use the handshake.
-                        return self
-                            .legacy_tools_list(url, version)
-                            .map(|tools| (tools, version.clone()));
+                        return self.legacy_start(url, version);
                     }
-                    if let Probe::Ok(value) = self.modern_tools_list(url, version) {
-                        return Ok((parse_tools(&value)?, version.clone()));
+                    if let Probe::Ok(value) = self.modern_call(url, version, "tools/list") {
+                        return Ok((Session::modern(version), value));
                     }
                 }
                 return Err(format!(
@@ -227,24 +266,39 @@ impl StaticEnumerator {
 
         let mut last = String::from("no legacy protocol version accepted");
         for version in LEGACY_PROTOCOL_VERSIONS {
-            match self.legacy_tools_list(url, version) {
-                Ok(tools) => return Ok((tools, (*version).to_owned())),
+            match self.legacy_start(url, version) {
+                Ok(established) => return Ok(established),
                 Err(err) => last = err,
             }
         }
         Err(with_sse_hint(url, last))
     }
 
-    /// A single stateless `tools/list` (revision 2026-07-28 and later).
-    fn modern_tools_list(&self, url: &str, version: &str) -> Probe {
+    /// One more list over an already-established session, best effort.
+    ///
+    /// Every failure collapses to `None`: an unimplemented capability, a
+    /// refusal and a timeout are all "nothing to analyse here", and none of
+    /// them says anything about the tools already retrieved.
+    fn optional_list(&self, url: &str, session: &Session, method: &str) -> Option<Value> {
+        match session {
+            Session::Modern { version } => match self.modern_call(url, version, method) {
+                Probe::Ok(value) => Some(value),
+                _ => None,
+            },
+            Session::Legacy { id, .. } => self.legacy_call(url, id.as_deref(), method).ok(),
+        }
+    }
+
+    /// A single stateless call (revision 2026-07-28 and later).
+    fn modern_call(&self, url: &str, version: &str, method: &str) -> Probe {
         let body = json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "tools/list",
+            "method": method,
             "params": { "_meta": self.request_meta(version) }
         });
 
-        let response = match self.post(url, &body, Some(version), "tools/list", None) {
+        let response = match self.post(url, &body, Some(version), method, None) {
             Ok(response) => response,
             Err(err) => return Probe::Fatal(err),
         };
@@ -303,7 +357,7 @@ impl StaticEnumerator {
 
     /// `initialize` -> `notifications/initialized` -> `tools/list`, for servers
     /// still on a handshake-based revision (2025-11-25 and earlier).
-    fn legacy_tools_list(&self, url: &str, version: &str) -> Result<Vec<ToolManifest>, String> {
+    fn legacy_start(&self, url: &str, version: &str) -> Result<(Session, Value), String> {
         let init = json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -326,24 +380,40 @@ impl StaticEnumerator {
             return Err("initialize: no result and no error".to_owned());
         }
 
-        let session = initialized.session_id.as_deref();
+        let id = initialized.session_id.clone();
 
         // Required by the legacy lifecycle. A server may 202 or 200 it; either
         // way a failure here is not worth aborting on.
         let ack = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-        let _ = self.post(url, &ack, None, "notifications/initialized", session);
+        let _ = self.post(url, &ack, None, "notifications/initialized", id.as_deref());
 
-        let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} });
-        let listed = self.post(url, &list, None, "tools/list", session)?;
-        let message = decode_jsonrpc(&listed.body)
-            .ok_or_else(|| format!("tools/list: {}", http_failure(listed.status, &listed.body)))?;
+        let tools = self.legacy_call(url, id.as_deref(), "tools/list")?;
+        Ok((
+            Session::Legacy {
+                version: version.to_owned(),
+                id,
+            },
+            tools,
+        ))
+    }
+
+    /// One call on an established legacy session, returning its `result`.
+    fn legacy_call(&self, url: &str, session: Option<&str>, method: &str) -> Result<Value, String> {
+        let body = json!({ "jsonrpc": "2.0", "id": 2, "method": method, "params": {} });
+        let response = self.post(url, &body, None, method, session)?;
+        let message = decode_jsonrpc(&response.body).ok_or_else(|| {
+            format!(
+                "{method}: {}",
+                http_failure(response.status, &response.body)
+            )
+        })?;
         if let Some(error) = message.get("error") {
-            return Err(format!("tools/list rejected: {}", jsonrpc_message(error)));
+            return Err(format!("{method} rejected: {}", jsonrpc_message(error)));
         }
-        let result = message
+        message
             .get("result")
-            .ok_or_else(|| "tools/list: no result and no error".to_owned())?;
-        parse_tools(result)
+            .cloned()
+            .ok_or_else(|| format!("{method}: no result and no error"))
     }
 
     fn request_meta(&self, version: &str) -> Value {
@@ -474,6 +544,46 @@ fn read_body(reader: impl Read, is_sse: bool) -> Result<String, String> {
         }
     }
     Ok(collected)
+}
+
+/// Everything one server advertises, before it is folded into a manifest.
+#[derive(Debug, Default)]
+struct Surface {
+    tools: Vec<ToolManifest>,
+    prompts: Vec<PromptManifest>,
+    resources: Vec<ResourceManifest>,
+}
+
+/// A settled protocol era, reusable for every further list.
+///
+/// Negotiation is not free: it can cost a rejected modern call plus a handshake
+/// before the first list succeeds. Paying that again for prompts and again for
+/// resources would triple the round trips and, on a legacy server, throw away
+/// the session the spec requires us to keep.
+#[derive(Debug)]
+enum Session {
+    Modern {
+        version: String,
+    },
+    Legacy {
+        version: String,
+        /// `Mcp-Session-Id`, when the server minted one.
+        id: Option<String>,
+    },
+}
+
+impl Session {
+    fn modern(version: &str) -> Self {
+        Session::Modern {
+            version: version.to_owned(),
+        }
+    }
+
+    fn protocol(&self) -> &str {
+        match self {
+            Session::Modern { version } | Session::Legacy { version, .. } => version,
+        }
+    }
 }
 
 /// Outcome of one modern probe.
@@ -639,6 +749,136 @@ pub(crate) fn parse_tools(result: &Value) -> Result<Vec<ToolManifest>, String> {
         tools.push(tool);
     }
     Ok(tools)
+}
+
+/// Parse a `prompts/list` result.
+///
+/// Lenient on purpose, unlike [`parse_tools`]: prompts are an optional
+/// capability, so a malformed list is a reason to analyse fewer prompts, never
+/// a reason to report the whole server as un-enumerable.
+pub(crate) fn parse_prompts(result: &Value) -> Vec<PromptManifest> {
+    let Some(items) = result.get("prompts").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    let mut prompts = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(object) = item.as_object() else {
+            continue; // one bad entry must not lose the others.
+        };
+        let Some(name) = object.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+
+        let mut prompt = PromptManifest::new(name);
+        prompt.title = object
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        prompt.description = object
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+
+        if let Some(arguments) = object.get("arguments").and_then(Value::as_array) {
+            for argument in arguments {
+                let Some(argument) = argument.as_object() else {
+                    continue;
+                };
+                let Some(name) = argument.get("name").and_then(Value::as_str) else {
+                    continue;
+                };
+                let mut parsed = PromptArgument::new(name);
+                parsed.description = argument
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                parsed.required = argument
+                    .get("required")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                prompt.arguments.push(parsed);
+            }
+        }
+
+        prompt.extra = object
+            .iter()
+            .filter(|(k, _)| !matches!(k.as_str(), "name" | "title" | "description" | "arguments"))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<Map<String, Value>>();
+
+        prompts.push(prompt);
+    }
+    prompts
+}
+
+/// Parse a `resources/list` result. Lenient, for the same reason as
+/// [`parse_prompts`].
+pub(crate) fn parse_resources(result: &Value) -> Vec<ResourceManifest> {
+    parse_resource_entries(result, "resources", "uri", false)
+}
+
+/// Parse a `resources/templates/list` result: the same entries, keyed by
+/// `uriTemplate` instead of `uri`.
+pub(crate) fn parse_resource_templates(result: &Value) -> Vec<ResourceManifest> {
+    parse_resource_entries(result, "resourceTemplates", "uriTemplate", true)
+}
+
+fn parse_resource_entries(
+    result: &Value,
+    list_key: &str,
+    uri_key: &str,
+    template: bool,
+) -> Vec<ResourceManifest> {
+    let Some(items) = result.get(list_key).and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    let mut resources = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(object) = item.as_object() else {
+            continue;
+        };
+        let Some(uri) = object.get(uri_key).and_then(Value::as_str) else {
+            continue;
+        };
+
+        let mut resource = if template {
+            ResourceManifest::template(uri)
+        } else {
+            ResourceManifest::new(uri)
+        };
+        resource.name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        resource.title = object
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        resource.description = object
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        resource.mime_type = object
+            .get("mimeType")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        resource.extra = object
+            .iter()
+            .filter(|(k, _)| {
+                !matches!(k.as_str(), "name" | "title" | "description" | "mimeType")
+                    && k.as_str() != uri_key
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<Map<String, Value>>();
+
+        resources.push(resource);
+    }
+    resources
 }
 
 /// Headers mcpwn sets itself. A user override would break the protocol or the

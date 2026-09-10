@@ -95,7 +95,7 @@ impl InventoryRenderer {
         for entry in servers {
             let status = match &entry.outcome {
                 Enumeration::Enumerated { protocol } => self.paint(
-                    format!("{} tool(s) via {protocol}", entry.tool_count()),
+                    format!("{} via {protocol}", surface_summary(entry)),
                     Style::new().green(),
                 ),
                 Enumeration::NotPossible { reason } => {
@@ -225,4 +225,19 @@ pub fn enumeration_warnings(servers: &[EnumeratedServer]) -> Vec<String> {
             Enumeration::Enumerated { .. } | Enumeration::NotPossible { .. } => None,
         })
         .collect()
+}
+
+/// What one server exposed, naming only the surfaces it actually has.
+///
+/// The same shape as [`crate::report::ScanMeta::surface_summary`], per server
+/// rather than per scan.
+fn surface_summary(entry: &EnumeratedServer) -> String {
+    let mut parts = vec![format!("{} tool(s)", entry.tool_count())];
+    if !entry.server.prompts.is_empty() {
+        parts.push(format!("{} prompt(s)", entry.server.prompts.len()));
+    }
+    if !entry.server.resources.is_empty() {
+        parts.push(format!("{} resource(s)", entry.server.resources.len()));
+    }
+    parts.join(", ")
 }

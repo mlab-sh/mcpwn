@@ -14,8 +14,17 @@ a tool came from, and nothing in the protocol says what happens when two servers
 offer the same tool name. A server is not just code you run: it is text injected
 into the model's context, and text in a context is instructions.
 
-Servers offer three kinds of thing. mcpwn only looks at **tools**, because tools
-are what the model can invoke.
+Servers offer three kinds of thing, and mcpwn reads all three:
+
+* **Tools** the model can invoke. The primary surface, because they act.
+* **Prompts**: templates the client expands into the conversation, usually
+  because the user picked one from a menu and therefore trusts it.
+* **Resources**: documents the client fetches and drops into the context,
+  addressed by URI, sometimes through a template that takes parameters.
+
+Only tools act, but all three are *read*. A prompt description and a resource
+description reach the model as literally as a tool description does, which makes
+them the same class of hiding place with less of a reviewer's attention on them.
 
 ## The wire
 
@@ -61,6 +70,22 @@ Three fields matter, and all three are model-visible:
 
 `mcp.lock` hashes exactly these three, because they are what decides whether the
 model calls the tool and with what.
+
+## The other two lists
+
+`prompts/list` returns a name, an optional title and description, and a list of
+arguments that each carry their own description. `resources/list` returns a URI,
+a name, a description and a MIME type; `resources/templates/list` returns the
+same fields keyed by `uriTemplate`, an RFC 6570 template standing for a family
+of resources rather than one.
+
+Both are **optional capabilities**. A server that implements neither answers
+`-32601`, and that is a normal answer, not a defect: mcpwn asks for them after
+`tools/list` and treats any refusal as "nothing here to analyse".
+
+Reading a resource is a different matter. `resources/read` returns content the
+server chooses, which is an ingest point by definition, so mcpwn never calls it
+during a scan.
 
 ## The 2026-07-28 change, and why the client is dual-era
 

@@ -210,3 +210,20 @@ pub fn json_200(body: &str) -> String {
 pub fn json_400(body: &str) -> String {
     http_response(400, "Bad Request", "application/json", body)
 }
+
+/// The optional lists mcpwn asks for once `tools/list` has succeeded.
+pub const OPTIONAL_LISTS: &[&str] = &["prompts/list", "resources/list", "resources/templates/list"];
+
+/// Answer an optional-capability list with `-32601`, the way a server that does
+/// not implement prompts or resources does.
+///
+/// Returns `None` for anything else, so a mock can hand the body on to its own
+/// logic: `if let Some(r) = refuse_optional_lists(&body) { return r; }`.
+pub fn refuse_optional_lists(body: &str) -> Option<String> {
+    let method = OPTIONAL_LISTS
+        .iter()
+        .find(|method| body.contains(&format!("\"{method}\"")))?;
+    Some(json_200(&format!(
+        r#"{{"jsonrpc":"2.0","id":1,"error":{{"code":-32601,"message":"{method} not implemented"}}}}"#
+    )))
+}

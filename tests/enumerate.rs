@@ -64,6 +64,11 @@ const TOOLS_RESULT: &str = r#"{
 #[test]
 fn modern_stateless_tools_list_is_parsed() {
     let url = spawn_mock(|body| {
+        // This server implements tools and nothing else, so the optional lists
+        // that follow are refused rather than asserted on.
+        if let Some(response) = common::refuse_optional_lists(&body) {
+            return response;
+        }
         // The current revision has no initialize handshake: the very first
         // request is tools/list, carrying its version in _meta.
         assert!(body.contains("\"tools/list\""), "unexpected body: {body}");
@@ -573,8 +578,19 @@ fn several_headers_are_all_sent() {
             "headers seen:\n{}",
             request.headers
         );
-        // The protocol headers mcpwn owns must still be intact.
-        assert!(request.has_header("mcp-method", "tools/list"));
+        // The protocol headers mcpwn owns must still be intact, and the user's
+        // headers must reach the optional lists too, not just `tools/list`.
+        assert!(
+            request.has_header("mcp-method", "tools/list")
+                || common::OPTIONAL_LISTS
+                    .iter()
+                    .any(|method| request.has_header("mcp-method", method)),
+            "headers seen:\n{}",
+            request.headers
+        );
+        if let Some(response) = common::refuse_optional_lists(&request.body) {
+            return response;
+        }
         json_200(TOOLS_RESULT)
     });
 

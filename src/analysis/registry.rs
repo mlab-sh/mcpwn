@@ -10,6 +10,7 @@ use super::flow::ToxicFlowCheck;
 use super::network::NetworkCheck;
 use super::obfuscation::ObfuscationCheck;
 use super::shadowing::ShadowingCheck;
+use super::surface::SurfaceCheck;
 
 /// The checks to run, split by the level they operate at.
 #[derive(Debug, Default)]
@@ -36,6 +37,7 @@ impl Registry {
             .with_server_check(PinningCheck::new())
             .with_server_check(TransportCheck::new())
             .with_server_check(NetworkCheck::new())
+            .with_server_check(SurfaceCheck::new())
             .with_global_check(ShadowingCheck::new())
             .with_global_check(ToxicFlowCheck::new())
     }

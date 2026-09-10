@@ -75,6 +75,8 @@ impl Analyzer {
         let mut meta = ScanMeta::new(self.config.target.clone());
         meta.servers = servers.len();
         meta.tools = ctx.tool_count();
+        meta.prompts = servers.iter().map(|s| s.prompts.len()).sum();
+        meta.resources = servers.iter().map(|s| s.resources.len()).sum();
         let mut report = Report::new(meta);
 
         for server in servers {

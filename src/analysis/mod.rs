@@ -17,3 +17,4 @@ pub mod rugpull;
 pub mod rules;
 pub mod schema;
 pub mod shadowing;
+pub mod surface;
