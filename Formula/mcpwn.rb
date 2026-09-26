@@ -2,26 +2,26 @@
 class Mcpwn < Formula
   desc "Security scanner for MCP servers. Flags dangerous tool definitions, hidden instructions, cross-server exfiltration chains, and servers that changed after you approved them"
   homepage "https://github.com/mlab-sh/mcpwn"
-  version "1.0.0"
+  version "1.0.1"
   license any_of: ["MIT", "Apache-2.0"]
 
   on_macos do
     if Hardware::CPU.arm?
       url "https://github.com/mlab-sh/mcpwn/releases/download/v#{version}/mcpwn-#{version}-aarch64-apple-darwin.tar.gz"
-      sha256 "1f9a6f08b07c374c996d26e6a7f3353249a39f960210ec436b1b54bbd27ce1f2"
+      sha256 "1e9988425df179b5badb1b0e25013b55b5ec80ae8f1076ccc84e3fc91aa04424"
     else
       url "https://github.com/mlab-sh/mcpwn/releases/download/v#{version}/mcpwn-#{version}-x86_64-apple-darwin.tar.gz"
-      sha256 "2c558080afb2d545bad2ce5793fbcea9d6066a784f99630debdf3a7f2132f78b"
+      sha256 "28b48a4fc1614bf564fd535a27a49e0956b998c04926058fb3080227f6ed69e4"
     end
   end
 
   on_linux do
     if Hardware::CPU.intel?
       url "https://github.com/mlab-sh/mcpwn/releases/download/v#{version}/mcpwn-#{version}-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "ec584f0fe3be4756df2a20b2b35e8877c9fd4ab3ed18a3f454dfeba2615b3cc6"
+      sha256 "8707d1f64c10c5f6bf2647d1426c785970a99751d4cc9a11cde6c738080d6115"
     elsif Hardware::CPU.arm?
       url "https://github.com/mlab-sh/mcpwn/releases/download/v#{version}/mcpwn-#{version}-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "3c3b9a82ada2dc5b7569cb067849d159cbedcd62749eccf57c10e2e722e41079"
+      sha256 "c0192f0eb4d6d2a77a4a41de1042825e07953ea731cde6cee9ace00a009c9579"
     end
   end
 
