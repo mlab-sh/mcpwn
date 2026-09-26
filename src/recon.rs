@@ -65,13 +65,17 @@ pub struct ServerProbe {
 pub struct Prober {
     timeout: Duration,
     headers: Vec<(String, String)>,
+    /// Shared so probes reuse pooled connections instead of re-handshaking.
+    agent: ureq::Agent,
 }
 
 impl Default for Prober {
     fn default() -> Self {
+        let timeout = Duration::from_secs(8);
         Self {
-            timeout: Duration::from_secs(8),
+            timeout,
             headers: Vec::new(),
+            agent: crate::enumerate::http_agent(timeout),
         }
     }
 }
@@ -83,6 +87,7 @@ impl Prober {
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self.agent = crate::enumerate::http_agent(timeout);
         self
     }
 
@@ -283,15 +288,6 @@ impl Prober {
 
     // --- HTTP plumbing ------------------------------------------------------
 
-    fn agent(&self) -> ureq::Agent {
-        ureq::Agent::config_builder()
-            .timeout_global(Some(self.timeout))
-            .http_status_as_error(false)
-            .user_agent(format!("{}/{}", crate::NAME, crate::VERSION))
-            .build()
-            .into()
-    }
-
     fn post(
         &self,
         url: &str,
@@ -300,7 +296,7 @@ impl Prober {
         protocol_version: Option<&str>,
     ) -> Option<Response> {
         let mut request = self
-            .agent()
+            .agent
             .post(url)
             .header("content-type", "application/json")
             .header("accept", "application/json, text/event-stream")
@@ -317,7 +313,7 @@ impl Prober {
     /// A request whose `Mcp-Method` header deliberately contradicts its body.
     fn post_with_method_header(&self, url: &str, body: &Value, header: &str) -> Option<Response> {
         let mut request = self
-            .agent()
+            .agent
             .post(url)
             .header("content-type", "application/json")
             .header("accept", "application/json, text/event-stream")
@@ -331,7 +327,7 @@ impl Prober {
 
     fn get(&self, url: &str) -> Option<Response> {
         finish(
-            self.agent()
+            self.agent
                 .get(url)
                 .header("accept", "text/event-stream, application/json, */*")
                 .call(),

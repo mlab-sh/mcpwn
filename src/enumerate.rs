@@ -112,17 +112,31 @@ pub struct StaticEnumerator {
     /// Extra headers sent with every request, e.g. `Authorization`. Applied to
     /// every HTTP server in the run.
     headers: Vec<(String, String)>,
+    /// Shared across every request so connections (and TLS sessions) are
+    /// pooled instead of re-handshaken on each JSON-RPC call.
+    agent: ureq::Agent,
 }
 
 impl Default for StaticEnumerator {
     fn default() -> Self {
+        let timeout = Duration::from_secs(10);
         Self {
-            timeout: Duration::from_secs(10),
+            timeout,
             client_name: crate::NAME.to_owned(),
             client_version: crate::VERSION.to_owned(),
             headers: Vec::new(),
+            agent: http_agent(timeout),
         }
     }
+}
+
+pub(crate) fn http_agent(timeout: Duration) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .http_status_as_error(false)
+        .user_agent(format!("{}/{}", crate::NAME, crate::VERSION))
+        .build()
+        .into()
 }
 
 impl StaticEnumerator {
@@ -133,6 +147,7 @@ impl StaticEnumerator {
     /// Total time budget per HTTP request.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self.agent = http_agent(timeout);
         self
     }
 
@@ -146,10 +161,18 @@ impl StaticEnumerator {
     /// Enumerate every server, consuming the manifests and returning them
     /// enriched. Never fails: each server carries its own outcome.
     pub fn enumerate_all(&self, servers: Vec<ServerManifest>) -> Vec<EnumeratedServer> {
-        servers
-            .into_iter()
-            .map(|server| self.enumerate(server))
-            .collect()
+        // ponytail: one thread per server, fine for config-sized lists; bound it if
+        // someone feeds hundreds of endpoints.
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = servers
+                .into_iter()
+                .map(|server| scope.spawn(|| self.enumerate(server)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("enumeration thread panicked"))
+                .collect()
+        })
     }
 
     /// Enumerate one server.
@@ -439,14 +462,8 @@ impl StaticEnumerator {
         method: &str,
         session: Option<&str>,
     ) -> Result<HttpResponse, String> {
-        let config = ureq::Agent::config_builder()
-            .timeout_global(Some(self.timeout))
-            .http_status_as_error(false)
-            .user_agent(format!("{}/{}", self.client_name, self.client_version))
-            .build();
-        let agent: ureq::Agent = config.into();
-
-        let mut request = agent
+        let mut request = self
+            .agent
             .post(url)
             .header("content-type", "application/json")
             .header("accept", "application/json, text/event-stream")

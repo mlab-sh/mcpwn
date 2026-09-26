@@ -1,6 +1,6 @@
 [package]
 name = "mcpwn"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 rust-version = "1.85"
 description = "Security scanner for MCP (Model Context Protocol) servers. Flags dangerous tool definitions, hidden instructions, cross-server exfiltration chains, and servers that changed after you approved them."

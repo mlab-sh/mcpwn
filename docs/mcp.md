@@ -97,7 +97,7 @@ capabilities in `_meta`:
 ```json
 "_meta": {
   "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-  "io.modelcontextprotocol/clientInfo": { "name": "mcpwn", "version": "1.0.0" },
+  "io.modelcontextprotocol/clientInfo": { "name": "mcpwn", "version": "1.0.1" },
   "io.modelcontextprotocol/clientCapabilities": {}
 }
 ```
